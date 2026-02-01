@@ -6,10 +6,11 @@
 #include "TouchDrvCSTXXX.hpp"
 #include <Wire.h>
 #include "ESP_I2S.h"
+#include <esp_vad.h>
 
 #include "esp_check.h"
 #include "es8311.h"
-#include "canon.h"
+#include "es7210.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -33,7 +34,19 @@ Arduino_CO5300 *gfx = new Arduino_CO5300(
 I2SClass i2s;
 #define EXAMPLE_SAMPLE_RATE 16000
 #define EXAMPLE_VOICE_VOLUME 90
-#define EXAMPLE_MIC_GAIN (es8311_mic_gain_t)(3)
+#define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
+#define EXAMPLE_ES7210_MIC_GAIN GAIN_37_5DB
+#define VAD_FRAME_LENGTH_MS 30
+#define VAD_BUFFER_LENGTH (VAD_FRAME_LENGTH_MS * EXAMPLE_SAMPLE_RATE / 1000)
+#define RECORD_TIME_MS 3000
+#define RECORD_BUFFER_SIZE (EXAMPLE_SAMPLE_RATE * RECORD_TIME_MS / 1000)
+#define VOICE_THRESHOLD 500
+
+int16_t *vad_buff;
+int16_t *record_buff;
+vad_handle_t vad_inst;
+bool recording = false;
+int record_index = 0;
 
 esp_err_t es8311_codec_init(void) {
   es8311_handle_t es_handle = es8311_create(0, ES8311_ADDRRES_0);
@@ -51,7 +64,7 @@ esp_err_t es8311_codec_init(void) {
   ESP_ERROR_CHECK(es8311_sample_frequency_config(es_handle, es_clk.mclk_frequency, es_clk.sample_frequency));
   ESP_ERROR_CHECK(es8311_microphone_config(es_handle, false));
   ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle, EXAMPLE_VOICE_VOLUME, NULL));
-  ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, EXAMPLE_MIC_GAIN));
+  ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, EXAMPLE_ES8311_MIC_GAIN));
   return ESP_OK;
 }
 
@@ -62,14 +75,89 @@ void audio_task(void *param) {
     vTaskDelete(NULL);
   }
 
-  Wire.begin(15, 14);
+  Wire.begin(IIC_SDA, IIC_SCL);
   if (es8311_codec_init() != ESP_OK) {
     Serial.println("ES8311 init failed!");
     vTaskDelete(NULL);
   }
 
+  audio_hal_codec_config_t es7210_cfg = {
+    .adc_input = AUDIO_HAL_ADC_INPUT_ALL,
+    .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,
+    .codec_mode = AUDIO_HAL_CODEC_MODE_ENCODE,
+    .i2s_iface = {
+      .mode = AUDIO_HAL_MODE_SLAVE,
+      .fmt = AUDIO_HAL_I2S_NORMAL,
+      .samples = AUDIO_HAL_16K_SAMPLES,
+      .bits = AUDIO_HAL_BIT_LENGTH_16BITS
+    }
+  };
+
+  if (es7210_adc_init(&Wire, &es7210_cfg) != ESP_OK) {
+    Serial.println("ES7210 init failed!");
+    vTaskDelete(NULL);
+  }
+  es7210_mic_select((es7210_input_mics_t)(ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2));
+  es7210_adc_set_gain_all(EXAMPLE_ES7210_MIC_GAIN);
+  es7210_adc_ctrl_state(AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
+  Serial.println("ES7210 initialized");
+
+  vad_inst = vad_create(VAD_MODE_3);
+  vad_buff = (int16_t *)malloc(VAD_BUFFER_LENGTH * sizeof(int16_t));
+  record_buff = (int16_t *)malloc(RECORD_BUFFER_SIZE * sizeof(int16_t));
+  if (!vad_buff || !record_buff) {
+    Serial.println("Memory allocation failed!");
+    vTaskDelete(NULL);
+  }
+
+  Serial.println("VAD audio system started");
+  int debug_count = 0;
   while (1) {
-    i2s.write((uint8_t *)canon_pcm, canon_pcm_len);
+    size_t bytes_read = i2s.readBytes((char *)vad_buff, VAD_BUFFER_LENGTH * sizeof(int16_t));
+    if (bytes_read > 0) {
+      int16_t max_val = 0;
+      for (int i = 0; i < VAD_BUFFER_LENGTH; i++) {
+        if (abs(vad_buff[i]) > max_val) max_val = abs(vad_buff[i]);
+      }
+      
+      if (debug_count++ < 5) {
+        Serial.printf("Samples: %d %d %d %d\n", vad_buff[0], vad_buff[1], vad_buff[2], vad_buff[3]);
+      }
+      
+      vad_state_t vad_state = vad_process(vad_inst, vad_buff, EXAMPLE_SAMPLE_RATE, VAD_FRAME_LENGTH_MS);
+      bool voice_detected = (vad_state == VAD_SPEECH) || (max_val > VOICE_THRESHOLD);
+      
+      if (voice_detected && !recording) {
+        Serial.println("Recording started...");
+        recording = true;
+        record_index = 0;
+      }
+      
+      if (recording) {
+        for (int i = 0; i < VAD_BUFFER_LENGTH && record_index < RECORD_BUFFER_SIZE; i++) {
+          record_buff[record_index++] = vad_buff[i];
+        }
+        
+        if (record_index >= RECORD_BUFFER_SIZE) {
+          Serial.println("=== WAV HEX START ===");
+          // Serial.print("52494646");
+          // uint32_t fileSize = 36 + RECORD_BUFFER_SIZE * 2;
+          // Serial.printf("%02X%02X%02X%02X", fileSize&0xFF, (fileSize>>8)&0xFF, (fileSize>>16)&0xFF, (fileSize>>24)&0xFF);
+          // Serial.print("5741564566D74201000000010000803E0000007D00000200100064617461");
+          // uint32_t dataSize = RECORD_BUFFER_SIZE * 2;
+          // Serial.printf("%02X%02X%02X%02X", dataSize&0xFF, (dataSize>>8)&0xFF, (dataSize>>16)&0xFF, (dataSize>>24)&0xFF);
+          // for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
+          //   Serial.printf("%02X%02X", record_buff[i]&0xFF, (record_buff[i]>>8)&0xFF);
+          // }
+          Serial.println();
+          Serial.println("=== WAV HEX END ===");
+          
+          i2s.write((uint8_t *)record_buff, RECORD_BUFFER_SIZE * sizeof(int16_t));
+          Serial.println("Playback complete");
+          recording = false;
+        }
+      }
+    }
     vTaskDelay(1);
   }
 }
