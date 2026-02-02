@@ -38,6 +38,11 @@ I2SClass i2s;
 #define EXAMPLE_VOICE_VOLUME 90
 #define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
 #define EXAMPLE_ES7210_MIC_GAIN GAIN_37_5DB
+#define RECORD_TIME_SEC 5
+#define RECORD_BUFFER_SIZE (EXAMPLE_SAMPLE_RATE * RECORD_TIME_SEC)
+
+static int16_t *record_buffer = NULL;
+static volatile bool wake_detected = false;
 
 esp_err_t es8311_codec_init(void) {
   es8311_handle_t es_handle = es8311_create(0, ES8311_ADDRRES_0);
@@ -112,12 +117,32 @@ void audio_task(void *param) {
   Serial.println("Initializing ESP_SR...");
   
   ESP_SR.onEvent([](sr_event_t event, int command_id, int phrase_id) {
-    if (event == SR_EVENT_WAKEWORD) {
-      Serial.println("=== 唤醒词检测: 小美同学 ===");
-      Serial.printf("Event: %d, Command: %d, Phrase: %d\n", event, command_id, phrase_id);
-    } else if (event == SR_EVENT_WAKEWORD_CHANNEL) {
-      Serial.printf("Wake word channel verified: %d\n", command_id);
-    }
+  switch (event) {
+    case SR_EVENT_WAKEWORD:
+      Serial.println("WakeWord Detected!");  // Wakeword detected
+      wake_detected = true;
+      break;
+    case SR_EVENT_WAKEWORD_CHANNEL:
+      Serial.printf("WakeWord Channel %d Verified!\n", command_id);  // Specific wakeword channel verified
+      ESP_SR.setMode(SR_MODE_COMMAND);                               // Switch to command detection mode
+      break;
+    case SR_EVENT_TIMEOUT:
+      Serial.println("Timeout Detected!");  // Timeout occurred
+      ESP_SR.setMode(SR_MODE_WAKEWORD);     // Switch back to wakeword detection mode
+      break;
+    case SR_EVENT_COMMAND:
+      Serial.printf("Command %d \n", command_id);  // Command recognized
+      switch (command_id) {
+        default:
+          Serial.println("Unknown Command!");  // Unknown command received
+          break;
+      }
+      ESP_SR.setMode(SR_MODE_COMMAND);  // Allow for more commands to be given before timeout
+      break;
+    default:
+      Serial.println("Unknown Event!");  // Unknown event received
+      break;
+  }
   });
 
   if (!ESP_SR.begin(i2s, NULL, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD)) {
@@ -125,9 +150,18 @@ void audio_task(void *param) {
     vTaskDelete(NULL);
   }
   Serial.println("ESP_SR initialized, listening for '小美同学'...");
-  Serial.println("Try saying: Hi ESP / 小美同学");
+
+  record_buffer = (int16_t *)heap_caps_malloc(RECORD_BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+  if (!record_buffer) {
+    Serial.println("Record buffer allocation failed!");
+    vTaskDelete(NULL);
+  }
 
   while (1) {
+    if (wake_detected) {
+      wake_detected = false;
+      Serial.println("Wake detected, waiting for processing...");
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
