@@ -36,9 +36,9 @@ Arduino_CO5300 *gfx = new Arduino_CO5300(
 I2SClass i2s;
 #define EXAMPLE_SAMPLE_RATE 16000
 #define EXAMPLE_VOICE_VOLUME 90
-#define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
-#define EXAMPLE_ES7210_MIC_GAIN GAIN_37_5DB
-#define RECORD_TIME_SEC 5
+#define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(6)
+#define EXAMPLE_ES7210_MIC_GAIN GAIN_30DB
+#define RECORD_TIME_SEC 6
 #define RECORD_BUFFER_SIZE (EXAMPLE_SAMPLE_RATE * RECORD_TIME_SEC)
 
 static int16_t *record_buffer = NULL;
@@ -142,8 +142,7 @@ void audio_task(void *param) {
     default:
       Serial.println("Unknown Event!");  // Unknown event received
       break;
-  }
-  });
+  }});
 
   if (!ESP_SR.begin(i2s, NULL, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD)) {
     Serial.println("ESP_SR init failed!");
@@ -160,7 +159,24 @@ void audio_task(void *param) {
   while (1) {
     if (wake_detected) {
       wake_detected = false;
-      Serial.println("Wake detected, waiting for processing...");
+      
+      ESP_SR.setMode(SR_MODE_OFF);
+      vTaskDelay(pdMS_TO_TICKS(200));
+      
+      Serial.println("录音6秒...");
+      for (int i = 0; i < RECORD_BUFFER_SIZE; i += 480) {
+        i2s.readBytes((char *)&record_buffer[i], 480 * sizeof(int16_t));
+      }
+      
+      Serial.println("播放...");
+      for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
+        record_buffer[i] = record_buffer[i] * 2;
+      }
+      i2s.write((uint8_t *)record_buffer, RECORD_BUFFER_SIZE * sizeof(int16_t));
+      Serial.println("完成，继续监听...");
+      
+      vTaskDelay(pdMS_TO_TICKS(200));
+      ESP_SR.setMode(SR_MODE_WAKEWORD);
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
