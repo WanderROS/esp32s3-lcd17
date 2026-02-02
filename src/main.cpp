@@ -11,6 +11,8 @@
 #include "esp_check.h"
 #include "es8311.h"
 #include "es7210.h"
+#include "ESP_SR.h"
+#include "esp_partition.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -36,17 +38,6 @@ I2SClass i2s;
 #define EXAMPLE_VOICE_VOLUME 90
 #define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
 #define EXAMPLE_ES7210_MIC_GAIN GAIN_37_5DB
-#define VAD_FRAME_LENGTH_MS 30
-#define VAD_BUFFER_LENGTH (VAD_FRAME_LENGTH_MS * EXAMPLE_SAMPLE_RATE / 1000)
-#define RECORD_TIME_MS 3000
-#define RECORD_BUFFER_SIZE (EXAMPLE_SAMPLE_RATE * RECORD_TIME_MS / 1000)
-#define VOICE_THRESHOLD 500
-
-int16_t *vad_buff;
-int16_t *record_buff;
-vad_handle_t vad_inst;
-bool recording = false;
-int record_index = 0;
 
 esp_err_t es8311_codec_init(void) {
   es8311_handle_t es_handle = es8311_create(0, ES8311_ADDRRES_0);
@@ -102,63 +93,42 @@ void audio_task(void *param) {
   es7210_adc_ctrl_state(AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
   Serial.println("ES7210 initialized");
 
-  vad_inst = vad_create(VAD_MODE_3);
-  vad_buff = (int16_t *)malloc(VAD_BUFFER_LENGTH * sizeof(int16_t));
-  record_buff = (int16_t *)malloc(RECORD_BUFFER_SIZE * sizeof(int16_t));
-  if (!vad_buff || !record_buff) {
-    Serial.println("Memory allocation failed!");
+  Serial.println("Checking model partition...");
+  const esp_partition_t* model_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "model");
+  if (!model_part) {
+    Serial.println("ERROR: Model partition not found!");
     vTaskDelete(NULL);
   }
+  Serial.printf("Model partition found at 0x%x, size: %d bytes\n", model_part->address, model_part->size);
 
-  Serial.println("VAD audio system started");
-  int debug_count = 0;
-  while (1) {
-    size_t bytes_read = i2s.readBytes((char *)vad_buff, VAD_BUFFER_LENGTH * sizeof(int16_t));
-    if (bytes_read > 0) {
-      int16_t max_val = 0;
-      for (int i = 0; i < VAD_BUFFER_LENGTH; i++) {
-        if (abs(vad_buff[i]) > max_val) max_val = abs(vad_buff[i]);
-      }
-      
-      if (debug_count++ < 5) {
-        Serial.printf("Samples: %d %d %d %d\n", vad_buff[0], vad_buff[1], vad_buff[2], vad_buff[3]);
-      }
-      
-      vad_state_t vad_state = vad_process(vad_inst, vad_buff, EXAMPLE_SAMPLE_RATE, VAD_FRAME_LENGTH_MS);
-      bool voice_detected = (vad_state == VAD_SPEECH) || (max_val > VOICE_THRESHOLD);
-      
-      if (voice_detected && !recording) {
-        Serial.println("Recording started...");
-        recording = true;
-        record_index = 0;
-      }
-      
-      if (recording) {
-        for (int i = 0; i < VAD_BUFFER_LENGTH && record_index < RECORD_BUFFER_SIZE; i++) {
-          record_buff[record_index++] = vad_buff[i];
-        }
-        
-        if (record_index >= RECORD_BUFFER_SIZE) {
-          Serial.println("=== WAV HEX START ===");
-          // Serial.print("52494646");
-          // uint32_t fileSize = 36 + RECORD_BUFFER_SIZE * 2;
-          // Serial.printf("%02X%02X%02X%02X", fileSize&0xFF, (fileSize>>8)&0xFF, (fileSize>>16)&0xFF, (fileSize>>24)&0xFF);
-          // Serial.print("5741564566D74201000000010000803E0000007D00000200100064617461");
-          // uint32_t dataSize = RECORD_BUFFER_SIZE * 2;
-          // Serial.printf("%02X%02X%02X%02X", dataSize&0xFF, (dataSize>>8)&0xFF, (dataSize>>16)&0xFF, (dataSize>>24)&0xFF);
-          // for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
-          //   Serial.printf("%02X%02X", record_buff[i]&0xFF, (record_buff[i]>>8)&0xFF);
-          // }
-          Serial.println();
-          Serial.println("=== WAV HEX END ===");
-          
-          i2s.write((uint8_t *)record_buff, RECORD_BUFFER_SIZE * sizeof(int16_t));
-          Serial.println("Playback complete");
-          recording = false;
-        }
-      }
+  uint8_t test_buf[16];
+  esp_partition_read(model_part, 0, test_buf, 16);
+  Serial.print("First 16 bytes: ");
+  for(int i=0; i<16; i++) Serial.printf("%02X ", test_buf[i]);
+  Serial.println();
+
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  Serial.println("Initializing ESP_SR...");
+  
+  ESP_SR.onEvent([](sr_event_t event, int command_id, int phrase_id) {
+    if (event == SR_EVENT_WAKEWORD) {
+      Serial.println("=== 唤醒词检测: 小美同学 ===");
+      Serial.printf("Event: %d, Command: %d, Phrase: %d\n", event, command_id, phrase_id);
+    } else if (event == SR_EVENT_WAKEWORD_CHANNEL) {
+      Serial.printf("Wake word channel verified: %d\n", command_id);
     }
-    vTaskDelay(1);
+  });
+
+  if (!ESP_SR.begin(i2s, NULL, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD)) {
+    Serial.println("ESP_SR init failed!");
+    vTaskDelete(NULL);
+  }
+  Serial.println("ESP_SR initialized, listening for '小美同学'...");
+  Serial.println("Try saying: Hi ESP / 小美同学");
+
+  while (1) {
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -205,6 +175,7 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 
 void setup() {
   Serial.begin(115200);
+  delay(10000);
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
 
@@ -220,14 +191,14 @@ void setup() {
 
   lv_init();
 
-  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
-  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  lv_color_t *buf2 = NULL;
 
 #if LV_USE_LOG != 0
   lv_log_register_print_cb(my_print);
 #endif
 
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, screenWidth * screenHeight / 4);
+  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, screenWidth * 40);
 
   static lv_disp_drv_t disp_drv;
   lv_disp_drv_init(&disp_drv);
@@ -257,9 +228,14 @@ void setup() {
   esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
-  lv_demo_widgets();  // 你也可以换成其他 demo
+  // lv_demo_widgets();  // Disabled to save memory for ESP_SR
 
-  xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 1, NULL, 1);
+  Serial.printf("Free heap: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+
+  Serial.println("Delaying audio task to save memory during startup...");
+  vTaskDelay(pdMS_TO_TICKS(2000));
+
+  xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 5, NULL, 1);
 
   Serial.println("Setup complete.");
 }
