@@ -7,7 +7,7 @@
 #include <Wire.h>
 #include "ESP_I2S.h"
 #include <esp_vad.h>
-
+#include <SD_MMC.h>
 #include "esp_check.h"
 #include "es8311.h"
 #include "es7210.h"
@@ -67,7 +67,39 @@ esp_err_t es8311_codec_init(void) {
   ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, EXAMPLE_ES8311_MIC_GAIN));
   return ESP_OK;
 }
+String listDir(fs::FS &fs, const char *dirname, uint8_t levels) {
+  Serial.println("Listing directory: " + String(dirname));
 
+  String dirContent = "Listing directory: " + String(dirname) + "\n";
+
+  File root = fs.open(dirname);
+  if (!root) {
+    Serial.println("Failed to open directory");
+    return "Failed to open directory\n";
+  }
+  if (!root.isDirectory()) {
+    Serial.println("Not a directory");
+    return "Not a directory\n";
+  }
+
+  File file = root.openNextFile();
+  while (file) {
+    if (file.isDirectory()) {
+      String dirName = "  DIR : " + String(file.name()) + "\n";
+      Serial.print(dirName);
+      dirContent += dirName;
+      if (levels) {
+        dirContent += listDir(fs, file.path(), levels - 1);
+      }
+    } else {
+      String fileInfo = "  FILE: " + String(file.name()) + "  SIZE: " + String(file.size()) + "\n";
+      Serial.print(fileInfo);
+      dirContent += fileInfo;
+    }
+    file = root.openNextFile();
+  }
+  return dirContent;
+}
 void audio_task(void *param) {
   i2s.setPins(BCLKPIN, WSPIN, DIPIN, DOPIN, MCLKPIN);
   if (!i2s.begin(I2S_MODE_STD, EXAMPLE_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
@@ -244,9 +276,9 @@ void setup() {
   indev_drv.read_cb = my_touchpad_read;
   lv_indev_drv_register(&indev_drv);
 
-  lv_obj_t *label = lv_label_create(lv_scr_act());
-  lv_label_set_text(label, "Hello Arduino and LVGL!");
-  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  // lv_obj_t *label = lv_label_create(lv_scr_act());
+  // lv_label_set_text(label, "Hello Arduino and LVGL!");
+  // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
     .callback = &example_increase_lvgl_tick,
@@ -257,7 +289,52 @@ void setup() {
   esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
-  lv_demo_widgets();  // 你也可以换成其他 demo
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+
+  lv_obj_t *sd_info_label = lv_label_create(lv_scr_act());
+  lv_label_set_long_mode(sd_info_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(sd_info_label, 300);
+  lv_obj_align(sd_info_label, LV_ALIGN_CENTER, 0, 0);
+
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("Card Mount Failed");
+    lv_label_set_text(sd_info_label, "Card Mount Failed");
+  }
+
+  uint8_t cardType = SD_MMC.cardType();
+  if (cardType == CARD_NONE) {
+    Serial.println("No SD_MMC card attached");
+    lv_label_set_text(sd_info_label, "No SD_MMC card attached");
+  }
+
+  Serial.print("SD_MMC Card Type: ");
+  if (cardType == CARD_MMC) {
+    Serial.println("MMC");
+  } else if (cardType == CARD_SD) {
+    Serial.println("SDSC");
+  } else if (cardType == CARD_SDHC) {
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+  Serial.println("SD_MMC Card Size: " + String(cardSize) + "MB");
+
+  char sd_info[256];
+  snprintf(sd_info, sizeof(sd_info), "SD_MMC Card Type: %s\nSD_MMC Card Size: %lluMB\n",
+           cardType == CARD_MMC ? "MMC" : cardType == CARD_SD   ? "SDSC"
+                                        : cardType == CARD_SDHC ? "SDHC"
+                                                                : "UNKNOWN",
+           cardSize);
+
+  String dirList = listDir(SD_MMC, "/", 0);
+  strncat(sd_info, dirList.c_str(), sizeof(sd_info) - strlen(sd_info) - 1);
+
+  lv_label_set_text(sd_info_label, sd_info);
+
+
+  // lv_demo_widgets();  // 你也可以换成其他 demo
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 4096, NULL, 1, NULL, 1);
 
