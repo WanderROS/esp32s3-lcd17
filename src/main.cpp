@@ -9,6 +9,7 @@
 #include "SD_MMC.h"
 #include "esp_check.h"
 #include "es8311.h"
+#include "XPowersLib.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -125,6 +126,34 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
   }
 }
 
+XPowersPMU power;
+
+bool pmu_flag = false;
+bool adc_switch = false;
+
+void setFlag(void) {
+  pmu_flag = true;
+}
+
+
+void adcOn() {
+  power.enableTemperatureMeasure();
+  // Enable internal ADC detection
+  power.enableBattDetection();
+  power.enableVbusVoltageMeasure();
+  power.enableBattVoltageMeasure();
+  power.enableSystemVoltageMeasure();
+}
+
+void adcOff() {
+  power.disableTemperatureMeasure();
+  // Enable internal ADC detection
+  power.disableBattDetection();
+  power.disableVbusVoltageMeasure();
+  power.disableBattVoltageMeasure();
+  power.disableSystemVoltageMeasure();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(4000);
@@ -132,6 +161,27 @@ void setup() {
   digitalWrite(PA, HIGH);
 
   Wire.begin(IIC_SDA, IIC_SCL);
+
+  bool result = power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
+
+  if (result == false) {
+    Serial.println("PMU is not online...");
+    while (1) delay(50);
+  }
+
+  setFlag();
+
+  power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+  power.setChargeTargetVoltage(3);
+  // Clear all interrupt flags
+  power.clearIrqStatus();
+  // Enable the required interrupt function
+  power.enableIRQ(
+    XPOWERS_AXP2101_PKEY_SHORT_IRQ  //POWER KEY
+    | XPOWERS_AXP2101_PKEY_LONG_IRQ
+  );
+
+  adcOn();
   CST9217.begin(Wire, touchAddress, IIC_SDA, IIC_SCL);
   CST9217.setMaxCoordinates(LCD_WIDTH, LCD_HEIGHT);
   CST9217.setMirrorXY(true, true);
@@ -190,6 +240,70 @@ void setup() {
 void loop() {
   lv_timer_handler();
   delay(5);
+    // Serial.println(pmu_flag);
+    if (pmu_flag) {
+    // pmu_flag = false;
+    // Get PMU Interrupt Status Register
+    uint32_t status = power.getIrqStatus();
+    if (power.isPekeyShortPressIrq()) {
+      if (adc_switch) {
+        adcOn();
+        Serial.println("Enable ADC\n\n\n");
+      } else {
+        adcOff();
+        Serial.println("Disable ADC\n\n\n");
+      }
+      adc_switch = !adc_switch;
+    }
+    if(power.isPekeyLongPressIrq()) {
+      Serial.println("Long Press Power Key IRQ\n\n\n");
+    }
+    if(power.isPowerOff()) {
+      Serial.println("Power Off IRQ\n\n\n");
+    }    
+    power.clearIrqStatus();
+  }
+
+  String info = "";
+
+  uint8_t charge_status = power.getChargerStatus();
+
+  info += "power Temperature: " + String(power.getTemperature()) + "*C\n";
+  info += "isCharging: " + String(power.isCharging() ? "YES" : "NO") + "\n";
+  info += "isDischarge: " + String(power.isDischarge() ? "YES" : "NO") + "\n";
+  info += "isStandby: " + String(power.isStandby() ? "YES" : "NO") + "\n";
+  info += "isVbusIn: " + String(power.isVbusIn() ? "YES" : "NO") + "\n";
+  info += "isVbusGood: " + String(power.isVbusGood() ? "YES" : "NO") + "\n";
+
+  switch (charge_status) {
+    case XPOWERS_AXP2101_CHG_TRI_STATE:
+      info += "Charger Status: tri_charge\n";
+      break;
+    case XPOWERS_AXP2101_CHG_PRE_STATE:
+      info += "Charger Status: pre_charge\n";
+      break;
+    case XPOWERS_AXP2101_CHG_CC_STATE:
+      info += "Charger Status: constant charge\n";
+      break;
+    case XPOWERS_AXP2101_CHG_CV_STATE:
+      info += "Charger Status: constant voltage\n";
+      break;
+    case XPOWERS_AXP2101_CHG_DONE_STATE:
+      info += "Charger Status: charge done\n";
+      break;
+    case XPOWERS_AXP2101_CHG_STOP_STATE:
+      info += "Charger Status: not charging\n";
+      break;
+  }
+
+  info += "Battery Voltage: " + String(power.getBattVoltage()) + "mV\n";
+  info += "Vbus Voltage: " + String(power.getVbusVoltage()) + "mV\n";
+  info += "System Voltage: " + String(power.getSystemVoltage()) + "mV\n";
+
+  if (power.isBatteryConnect()) {
+    info += "Battery Percent: " + String(power.getBatteryPercent()) + "%\n";
+  }
+  // Serial.println(info);
 }
 
 
