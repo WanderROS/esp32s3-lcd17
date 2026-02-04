@@ -70,11 +70,11 @@ void audio_task(void *param) {
   delay(100);
 
   audio.setPinout(BCLKPIN, WSPIN, DIPIN, MCLKPIN);
-  audio.setVolume(21);
+  audio.setVolume(2);
   
   delay(100);
   
-  audio.connecttoFS(SD_MMC, "/1.mp3");
+  audio.connecttoFS(SD_MMC, "/0.mp3");
   
   Serial.println("Playing MP3...");
   
@@ -127,6 +127,7 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 
 void setup() {
   Serial.begin(115200);
+  delay(4000);
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
 
@@ -202,6 +203,7 @@ void audio_id3data(const char *info){  //id3 metadata
 }
 void audio_eof_mp3(const char *info){  //end of file
     Serial.print("eof_mp3     ");Serial.println(info);
+    // audio.connecttoFS(SD_MMC, "/1.mp3");
 }
 void audio_showstation(const char *info){
     Serial.print("station     ");Serial.println(info);
