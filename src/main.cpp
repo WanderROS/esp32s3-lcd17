@@ -5,8 +5,9 @@
 #include <demos/lv_demos.h>
 #include "TouchDrvCSTXXX.hpp"
 #include <Wire.h>
-#include <SD_MMC.h>
 #include "Audio.h"
+#include "SD_MMC.h"
+#include "esp_check.h"
 #include "es8311.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
@@ -29,127 +30,53 @@ Arduino_CO5300 *gfx = new Arduino_CO5300(
   bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */, 6, 0, 0, 0);
 
 Audio audio;
-es8311_handle_t es_handle = NULL; // 全局 ES8311 句柄
+
+#define EXAMPLE_SAMPLE_RATE 44100
 #define EXAMPLE_VOICE_VOLUME 90
+#define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
+esp_err_t es8311_codec_init(void) {
+  es8311_handle_t es_handle = es8311_create(0, ES8311_ADDRRES_0);
+  ESP_RETURN_ON_FALSE(es_handle, ESP_FAIL, "ES8311", "create failed");
 
-// Audio 回调函数
-void audio_info(const char *info){
-    Serial.print("audio_info: "); Serial.println(info);
-    
-    if (strstr(info, "SampleRate:") && es_handle) {
-        int sampleRate = 0;
-        if (sscanf(info, "SampleRate: %d", &sampleRate) == 1 && sampleRate > 0) {
-            Serial.printf("Reconfiguring ES8311 for %dHz\n", sampleRate);
-            const es8311_clock_config_t es_clk = {
-                .mclk_inverted = false,
-                .sclk_inverted = false,
-                .mclk_from_mclk_pin = true,
-                .mclk_frequency = sampleRate * 256,
-                .sample_frequency = sampleRate
-            };
-            es8311_init(es_handle, &es_clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16);
-            es8311_microphone_config(es_handle, false);
-            es8311_voice_mute(es_handle, false);
-            es8311_voice_volume_set(es_handle, EXAMPLE_VOICE_VOLUME, NULL);
-        }
-    }
-}
-void audio_id3data(const char *info){  
-    Serial.print("id3data: "); Serial.println(info);
-}
-void audio_eof_mp3(const char *info){
-    Serial.print("eof_mp3: "); Serial.println(info);
-}
-void audio_showstation(const char *info){
-    Serial.print("station: "); Serial.println(info);
-}
-void audio_showstreamtitle(const char *info){
-    Serial.print("streamtitle: "); Serial.println(info);
-}
-void audio_bitrate(const char *info){
-    Serial.print("bitrate: "); Serial.println(info);
-}
-void audio_commercial(const char *info){
-    Serial.print("commercial: "); Serial.println(info);
-}
-void audio_icyurl(const char *info){
-    Serial.print("icyurl: "); Serial.println(info);
-}
-void audio_lasthost(const char *info){
-    Serial.print("lasthost: "); Serial.println(info);
-}
-
-
-String listDir(fs::FS &fs, const char *dirname, uint8_t levels) {
-  Serial.println("Listing directory: " + String(dirname));
-
-  String dirContent = "Listing directory: " + String(dirname) + "\n";
-
-  File root = fs.open(dirname);
-  if (!root) {
-    Serial.println("Failed to open directory");
-    return "Failed to open directory\n";
-  }
-  if (!root.isDirectory()) {
-    Serial.println("Not a directory");
-    return "Not a directory\n";
-  }
-
-  File file = root.openNextFile();
-  while (file) {
-    if (file.isDirectory()) {
-      String dirName = "  DIR : " + String(file.name()) + "\n";
-      Serial.print(dirName);
-      dirContent += dirName;
-      if (levels) {
-        dirContent += listDir(fs, file.path(), levels - 1);
-      }
-    } else {
-      String fileInfo = "  FILE: " + String(file.name()) + "  SIZE: " + String(file.size()) + "\n";
-      Serial.print(fileInfo);
-      dirContent += fileInfo;
-    }
-    file = root.openNextFile();
-  }
-  return dirContent;
-}
-void audio_task(void *param) {
-  delay(1000);
-  
-  Wire.begin(IIC_SDA, IIC_SCL);
-  
-  // 初始化 ES8311（使用 MCLK 引脚）
-  es_handle = es8311_create(0, ES8311_ADDRRES_0);
-  if (!es_handle) {
-    Serial.println("ES8311 create failed!");
-    vTaskDelete(NULL);
-  }
-  
   const es8311_clock_config_t es_clk = {
     .mclk_inverted = false,
     .sclk_inverted = false,
     .mclk_from_mclk_pin = true,
-    .mclk_frequency = 44100 * 256,
-    .sample_frequency = 44100
+    .mclk_frequency = EXAMPLE_SAMPLE_RATE * 256,
+    .sample_frequency = EXAMPLE_SAMPLE_RATE
   };
-  
+
   ESP_ERROR_CHECK(es8311_init(es_handle, &es_clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16));
+  ESP_ERROR_CHECK(es8311_sample_frequency_config(es_handle, es_clk.mclk_frequency, es_clk.sample_frequency));
   ESP_ERROR_CHECK(es8311_microphone_config(es_handle, false));
-  ESP_ERROR_CHECK(es8311_voice_mute(es_handle, false));
   ESP_ERROR_CHECK(es8311_voice_volume_set(es_handle, EXAMPLE_VOICE_VOLUME, NULL));
+  ESP_ERROR_CHECK(es8311_microphone_gain_set(es_handle, EXAMPLE_ES8311_MIC_GAIN));
+  return ESP_OK;
+}
+
+void audio_task(void *param) {
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("SD Card init failed!");
+    vTaskDelete(NULL);
+  }
+
+  Wire.begin(IIC_SDA, IIC_SCL);
+  if (es8311_codec_init() != ESP_OK) {
+    Serial.println("ES8311 init failed!");
+    vTaskDelete(NULL);
+  }
   
-  Serial.println("ES8311 initialized");
-  
-  pinMode(PA, OUTPUT);
-  digitalWrite(PA, HIGH);
   delay(100);
-  
-  // 配置 Audio I2S（MCLK 会自动输出）
-  audio.setPinout(BCLKPIN, WSPIN, DOPIN, MCLKPIN);
+
+  audio.setPinout(BCLKPIN, WSPIN, DIPIN, MCLKPIN);
   audio.setVolume(21);
   
-  Serial.println("Playing /sdcard/1.mp3");
+  delay(100);
+  
   audio.connecttoFS(SD_MMC, "/1.mp3");
+  
+  Serial.println("Playing MP3...");
   
   while (1) {
     audio.loop();
@@ -200,7 +127,6 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 
 void setup() {
   Serial.begin(115200);
-  delay(5000);
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
 
@@ -240,9 +166,9 @@ void setup() {
   indev_drv.read_cb = my_touchpad_read;
   lv_indev_drv_register(&indev_drv);
 
-  // lv_obj_t *label = lv_label_create(lv_scr_act());
-  // lv_label_set_text(label, "Hello Arduino and LVGL!");
-  // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_t *label = lv_label_create(lv_scr_act());
+  lv_label_set_text(label, "Hello Arduino and LVGL!");
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
     .callback = &example_increase_lvgl_tick,
@@ -253,52 +179,7 @@ void setup() {
   esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
-  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-
-  lv_obj_t *sd_info_label = lv_label_create(lv_scr_act());
-  lv_label_set_long_mode(sd_info_label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(sd_info_label, 300);
-  lv_obj_align(sd_info_label, LV_ALIGN_CENTER, 0, 0);
-
-  if (!SD_MMC.begin("/sdcard", true)) {
-    Serial.println("Card Mount Failed");
-    lv_label_set_text(sd_info_label, "Card Mount Failed");
-  }
-
-  uint8_t cardType = SD_MMC.cardType();
-  if (cardType == CARD_NONE) {
-    Serial.println("No SD_MMC card attached");
-    lv_label_set_text(sd_info_label, "No SD_MMC card attached");
-  }
-
-  Serial.print("SD_MMC Card Type: ");
-  if (cardType == CARD_MMC) {
-    Serial.println("MMC");
-  } else if (cardType == CARD_SD) {
-    Serial.println("SDSC");
-  } else if (cardType == CARD_SDHC) {
-    Serial.println("SDHC");
-  } else {
-    Serial.println("UNKNOWN");
-  }
-
-  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.println("SD_MMC Card Size: " + String(cardSize) + "MB");
-
-  char sd_info[256];
-  snprintf(sd_info, sizeof(sd_info), "SD_MMC Card Type: %s\nSD_MMC Card Size: %lluMB\n",
-           cardType == CARD_MMC ? "MMC" : cardType == CARD_SD   ? "SDSC"
-                                        : cardType == CARD_SDHC ? "SDHC"
-                                                                : "UNKNOWN",
-           cardSize);
-
-  String dirList = listDir(SD_MMC, "/", 0);
-  strncat(sd_info, dirList.c_str(), sizeof(sd_info) - strlen(sd_info) - 1);
-
-  lv_label_set_text(sd_info_label, sd_info);
-
-
-  // lv_demo_widgets();  // 你也可以换成其他 demo
+  lv_demo_widgets();  // 你也可以换成其他 demo
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
@@ -308,4 +189,41 @@ void setup() {
 void loop() {
   lv_timer_handler();
   delay(5);
+}
+
+
+
+// optional
+void audio_info(const char *info){
+    Serial.print("info        "); Serial.println(info);
+}
+void audio_id3data(const char *info){  //id3 metadata
+    Serial.print("id3data     ");Serial.println(info);
+}
+void audio_eof_mp3(const char *info){  //end of file
+    Serial.print("eof_mp3     ");Serial.println(info);
+}
+void audio_showstation(const char *info){
+    Serial.print("station     ");Serial.println(info);
+}
+void audio_showstreaminfo(const char *info){
+    Serial.print("streaminfo  ");Serial.println(info);
+}
+void audio_showstreamtitle(const char *info){
+    Serial.print("streamtitle ");Serial.println(info);
+}
+void audio_bitrate(const char *info){
+    Serial.print("bitrate     ");Serial.println(info);
+}
+void audio_commercial(const char *info){  //duration in sec
+    Serial.print("commercial  ");Serial.println(info);
+}
+void audio_icyurl(const char *info){  //homepage
+    Serial.print("icyurl      ");Serial.println(info);
+}
+void audio_lasthost(const char *info){  //stream URL played
+    Serial.print("lasthost    ");Serial.println(info);
+}
+void audio_eof_speech(const char *info){
+    Serial.print("eof_speech  ");Serial.println(info);
 }
