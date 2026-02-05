@@ -55,6 +55,9 @@ esp_err_t es8311_codec_init(void) {
   return ESP_OK;
 }
 
+std::vector<String> mp3Files;
+int currentMp3Index = 0;
+
 void audio_task(void *param) {
   SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
   if (!SD_MMC.begin("/sdcard", true)) {
@@ -71,13 +74,29 @@ void audio_task(void *param) {
   delay(100);
 
   audio.setPinout(BCLKPIN, WSPIN, DIPIN, MCLKPIN);
-  audio.setVolume(2);
+  audio.setVolume(6);
   
   delay(100);
   
-  audio.connecttoFS(SD_MMC, "/0.mp3");
+  File root = SD_MMC.open("/");
+  if (root) {
+    File file = root.openNextFile();
+    while (file) {
+      String fileName = String(file.name());
+      if (!file.isDirectory() && fileName.endsWith(".mp3")) {
+        mp3Files.push_back("/" + fileName);
+        Serial.println("Found: " + fileName);
+      }
+      file = root.openNextFile();
+    }
+  }
   
-  Serial.println("Playing MP3...");
+  if (mp3Files.size() > 0) {
+    audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
+    Serial.println("Playing: " + mp3Files[currentMp3Index]);
+  } else {
+    Serial.println("No MP3 files found!");
+  }
   
   while (1) {
     audio.loop();
@@ -171,6 +190,11 @@ void setup() {
 
   setFlag();
 
+  // 配置长按开机时间 (128ms, 512ms, 1s, 2s)
+  power.setPowerKeyPressOnTime(XPOWERS_POWERON_2S);
+  // 配置长按检测时间 - 触发 isPekeyLongPressIrq (1s, 1.5s, 2s, 2.5s)
+  power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
+
   power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
   power.setChargeTargetVoltage(3);
   // Clear all interrupt flags
@@ -256,11 +280,9 @@ void loop() {
       adc_switch = !adc_switch;
     }
     if(power.isPekeyLongPressIrq()) {
-      Serial.println("Long Press Power Key IRQ\n\n\n");
-    }
-    if(power.isPowerOff()) {
-      Serial.println("Power Off IRQ\n\n\n");
-    }    
+      Serial.println("Long Press Power Key - Shutting down...\n\n\n");
+      power.shutdown();
+    }  
     power.clearIrqStatus();
   }
 
@@ -317,7 +339,11 @@ void audio_id3data(const char *info){  //id3 metadata
 }
 void audio_eof_mp3(const char *info){  //end of file
     Serial.print("eof_mp3     ");Serial.println(info);
-    // audio.connecttoFS(SD_MMC, "/1.mp3");
+    if (mp3Files.size() > 0) {
+      currentMp3Index = (currentMp3Index + 1) % mp3Files.size();
+      audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
+      Serial.println("Playing: " + mp3Files[currentMp3Index]);
+    }
 }
 void audio_showstation(const char *info){
     Serial.print("station     ");Serial.println(info);
