@@ -13,6 +13,7 @@
 #include "es7210.h"
 #include "ESP_SR.h"
 #include "esp_partition.h"
+#include "SD_MMC.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -225,9 +226,14 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 
 void setup() {
   Serial.begin(115200);
-  delay(10000);
+  delay(4000);
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
+
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("SD Card init failed!");
+  }
 
   Wire.begin(IIC_SDA, IIC_SCL);
   CST9217.begin(Wire, touchAddress, IIC_SDA, IIC_SCL);
