@@ -169,6 +169,36 @@ void audio_task(void *param) {
         i2s.readBytes((char *)&record_buffer[i], 480 * sizeof(int16_t));
       }
       
+      char filename[32];
+      snprintf(filename, sizeof(filename), "/%08lx.wav", esp_random());
+      File file = SD_MMC.open(filename, FILE_WRITE);
+      if (file) {
+        uint32_t dataSize = RECORD_BUFFER_SIZE * sizeof(int16_t);
+        uint32_t fileSize = dataSize + 36;
+        file.write((uint8_t*)"RIFF", 4);
+        file.write((uint8_t*)&fileSize, 4);
+        file.write((uint8_t*)"WAVE", 4);
+        file.write((uint8_t*)"fmt ", 4);
+        uint32_t fmtSize = 16;
+        uint16_t audioFormat = 1, channels = 1, bitsPerSample = 16;
+        uint32_t sampleRate = EXAMPLE_SAMPLE_RATE, byteRate = sampleRate * channels * bitsPerSample / 8;
+        uint16_t blockAlign = channels * bitsPerSample / 8;
+        file.write((uint8_t*)&fmtSize, 4);
+        file.write((uint8_t*)&audioFormat, 2);
+        file.write((uint8_t*)&channels, 2);
+        file.write((uint8_t*)&sampleRate, 4);
+        file.write((uint8_t*)&byteRate, 4);
+        file.write((uint8_t*)&blockAlign, 2);
+        file.write((uint8_t*)&bitsPerSample, 2);
+        file.write((uint8_t*)"data", 4);
+        file.write((uint8_t*)&dataSize, 4);
+        file.write((uint8_t*)record_buffer, dataSize);
+        file.close();
+        Serial.printf("已保存: %s\n", filename);
+      } else {
+        Serial.println("文件打开失败!");
+      }
+      
       Serial.println("播放...");
       for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
         record_buffer[i] = record_buffer[i] * 2;
