@@ -351,10 +351,12 @@ void setup()
   disp_drv.hor_res = screenWidth;
   disp_drv.ver_res = screenHeight;
   disp_drv.flush_cb = my_disp_flush;
-  disp_drv.rounder_cb = example_lvgl_rounder_cb;
   disp_drv.draw_buf = &draw_buf;
-  disp_drv.sw_rotate = 1;
+  disp_drv.rounder_cb = example_lvgl_rounder_cb;
+  disp_drv.sw_rotate=1;
   disp = lv_disp_drv_register(&disp_drv);
+
+  // lv_disp_set_rotation(disp, LV_DISP_ROT_180);
 
   static lv_indev_drv_t indev_drv;
   lv_indev_drv_init(&indev_drv);
@@ -386,42 +388,42 @@ void loop()
   lv_timer_handler();
   delay(5);
 
-  if (qmi.getDataReady())
-  {
-    if (qmi.getAccelerometer(acc.x, acc.y, acc.z))
-    {
-      angleX = acc.x;
-      angleY = acc.y;
-      if (angleX > 0.8 && !rotation)
-      {
-        lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
-        rotation = true;
-         Serial.println("翻转屏幕1");
-      }
-      else if (angleX < -0.8 && !rotation)
-      {
-        lv_disp_set_rotation(disp, LV_DISP_ROT_180);
-        rotation = true;
-         Serial.println("翻转屏幕2");
-      }
-      else if (angleY < -0.8 && !rotation)
-      {
-        lv_disp_set_rotation(disp, LV_DISP_ROT_270);
-        rotation = true;
-         Serial.println("翻转屏幕3");
-      }
-      else if (angleY > 0.8 && !rotation)
-      {
-        lv_disp_set_rotation(disp, LV_DISP_ROT_90);
-        rotation = true;
-        Serial.println("翻转屏幕4");
-      }
-      if ((angleX <= 0.8 && angleX >= -0.8) && (angleY <= 0.8 && angleY >= -0.8))
-      {
-        rotation = false; // 允许重新执行旋转
-      }
-    }
-  }
+  // if (qmi.getDataReady())
+  // {
+  //   if (qmi.getAccelerometer(acc.x, acc.y, acc.z))
+  //   {
+  //     angleX = acc.x;
+  //     angleY = acc.y;
+  //     if (angleX > 0.8 && !rotation)
+  //     {
+  //       lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
+  //       rotation = true;
+  //        Serial.println("翻转屏幕1");
+  //     }
+  //     else if (angleX < -0.8 && !rotation)
+  //     {
+  //       lv_disp_set_rotation(disp, LV_DISP_ROT_180);
+  //       rotation = true;
+  //        Serial.println("翻转屏幕2");
+  //     }
+  //     else if (angleY < -0.8 && !rotation)
+  //     {
+  //       lv_disp_set_rotation(disp, LV_DISP_ROT_270);
+  //       rotation = true;
+  //        Serial.println("翻转屏幕3");
+  //     }
+  //     else if (angleY > 0.8 && !rotation)
+  //     {
+  //       lv_disp_set_rotation(disp, LV_DISP_ROT_90);
+  //       rotation = true;
+  //       Serial.println("翻转屏幕4");
+  //     }
+  //     if ((angleX <= 0.8 && angleX >= -0.8) && (angleY <= 0.8 && angleY >= -0.8))
+  //     {
+  //       rotation = false; // 允许重新执行旋转
+  //     }
+  //   }
+  // }
 
   if (millis() - lastMillis > 1000)
   {
