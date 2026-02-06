@@ -323,7 +323,16 @@ void loop() {
   info += "System Voltage: " + String(power.getSystemVoltage()) + "mV\n";
 
   if (power.isBatteryConnect()) {
-    info += "Battery Percent: " + String(power.getBatteryPercent()) + "%\n";
+    int percent = power.getBatteryPercent();
+    if (percent == 0) {
+      int voltage = power.getBattVoltage();
+      if (voltage > 4100) percent = 100;
+      else if (voltage > 3900) percent = 75;
+      else if (voltage > 3700) percent = 50;
+      else if (voltage > 3500) percent = 25;
+      else percent = 10;
+    }
+    info += "Battery Percent: " + String(percent) + "%\n";
   }
   // Serial.println(info);
 }
