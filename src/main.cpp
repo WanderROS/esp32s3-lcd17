@@ -164,10 +164,21 @@ void audio_task(void *param) {
       ESP_SR.setMode(SR_MODE_OFF);
       vTaskDelay(pdMS_TO_TICKS(200));
       
-      Serial.println("录音6秒...");
-      for (int i = 0; i < RECORD_BUFFER_SIZE; i += 480) {
-        i2s.readBytes((char *)&record_buffer[i], 480 * sizeof(int16_t));
+      Serial.println("录音6秒...（单声道）");
+      int16_t *stereo_buffer = (int16_t *)heap_caps_malloc(RECORD_BUFFER_SIZE * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+      uint32_t total_read = 0;
+      uint32_t start_time = millis();
+      while (total_read < RECORD_BUFFER_SIZE * 2 * sizeof(int16_t)) {
+        size_t bytes_read = i2s.readBytes((char *)&stereo_buffer[total_read / sizeof(int16_t)], 
+                                          (RECORD_BUFFER_SIZE * 2 * sizeof(int16_t) - total_read));
+        total_read += bytes_read;
       }
+      for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
+        record_buffer[i] = stereo_buffer[i * 2];
+      }
+      heap_caps_free(stereo_buffer);
+      uint32_t elapsed = millis() - start_time;
+      Serial.printf("录音完成，耗时: %d ms, 读取: %d 字节\n", elapsed, total_read);
       
       char filename[32];
       snprintf(filename, sizeof(filename), "/%08lx.wav", esp_random());
@@ -180,7 +191,7 @@ void audio_task(void *param) {
         file.write((uint8_t*)"WAVE", 4);
         file.write((uint8_t*)"fmt ", 4);
         uint32_t fmtSize = 16;
-        uint16_t audioFormat = 1, channels = 2, bitsPerSample = 16;
+        uint16_t audioFormat = 1, channels = 1, bitsPerSample = 16;
         uint32_t sampleRate = EXAMPLE_SAMPLE_RATE, byteRate = sampleRate * channels * bitsPerSample / 8;
         uint16_t blockAlign = channels * bitsPerSample / 8;
         file.write((uint8_t*)&fmtSize, 4);
