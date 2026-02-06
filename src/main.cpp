@@ -19,6 +19,11 @@ int16_t y[MAX_TOUCH_POINTS];
 TouchDrvCST92xx CST9217;
 uint8_t touchAddress = 0x5A;
 
+#include <ESP_IOExpander_Library.h>
+ESP_IOExpander *expander = nullptr;
+#define TCA9554_I2C_ADDRESS 0x20
+#define PMU_IRQ_PIN 5
+
 uint32_t screenWidth;
 uint32_t screenHeight;
 
@@ -150,7 +155,7 @@ XPowersPMU power;
 bool pmu_flag = false;
 bool adc_switch = false;
 
-void setFlag(void) {
+void IRAM_ATTR pmuIrqHandler() {
   pmu_flag = true;
 }
 
@@ -181,6 +186,14 @@ void setup() {
 
   Wire.begin(IIC_SDA, IIC_SCL);
 
+  // 初始化TCA9554扩展IO
+  expander = new ESP_IOExpander_TCA95xx_8bit(I2C_NUM_0, TCA9554_I2C_ADDRESS, IIC_SCL, IIC_SDA);
+  expander->init();
+  expander->begin();
+  
+  // 配置扩展IO的5号引脚为输入，用于检测PMU中断
+  expander->pinMode(PMU_IRQ_PIN, INPUT);
+
   bool result = power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
 
   if (result == false) {
@@ -188,8 +201,6 @@ void setup() {
     while (1) delay(50);
   }
   Serial.println("PMU getID:" + String(power.getChipID(), HEX));
-
-  setFlag();
 
   //  设置系统电压过低保护
   //  范围: 2600~3300mV
@@ -297,10 +308,14 @@ void setup() {
 void loop() {
   lv_timer_handler();
   delay(5);
-    // Serial.println(pmu_flag);
-    if (pmu_flag) {
-    // pmu_flag = false;
-    // Get PMU Interrupt Status Register
+  
+  // 检测扩展IO的PMU中断引脚
+  if (expander->digitalRead(PMU_IRQ_PIN) == LOW) {
+    pmu_flag = true;
+  }
+  
+  if (pmu_flag) {
+    pmu_flag = false;
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq()) {
       if (adc_switch) {
@@ -367,7 +382,7 @@ void loop() {
     }
     info += "Battery Percent: " + String(percent) + "%\n";
   }
-  Serial.println(info);
+  // Serial.println(info);
 }
 
 
