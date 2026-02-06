@@ -30,27 +30,27 @@ uint32_t screenHeight;
 static lv_disp_draw_buf_t draw_buf;
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
-  LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
+    LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
 
 Arduino_CO5300 *gfx = new Arduino_CO5300(
-  bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */, 6, 0, 0, 0);
+    bus, LCD_RESET /* RST */, 0 /* rotation */, LCD_WIDTH /* width */, LCD_HEIGHT /* height */, 6, 0, 0, 0);
 
 Audio audio;
 
 #define EXAMPLE_SAMPLE_RATE 44100
 #define EXAMPLE_VOICE_VOLUME 90
 #define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(3)
-esp_err_t es8311_codec_init(void) {
+esp_err_t es8311_codec_init(void)
+{
   es8311_handle_t es_handle = es8311_create(0, ES8311_ADDRRES_0);
   ESP_RETURN_ON_FALSE(es_handle, ESP_FAIL, "ES8311", "create failed");
 
   const es8311_clock_config_t es_clk = {
-    .mclk_inverted = false,
-    .sclk_inverted = false,
-    .mclk_from_mclk_pin = true,
-    .mclk_frequency = EXAMPLE_SAMPLE_RATE * 256,
-    .sample_frequency = EXAMPLE_SAMPLE_RATE
-  };
+      .mclk_inverted = false,
+      .sclk_inverted = false,
+      .mclk_from_mclk_pin = true,
+      .mclk_frequency = EXAMPLE_SAMPLE_RATE * 256,
+      .sample_frequency = EXAMPLE_SAMPLE_RATE};
 
   ESP_ERROR_CHECK(es8311_init(es_handle, &es_clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16));
   ESP_ERROR_CHECK(es8311_sample_frequency_config(es_handle, es_clk.mclk_frequency, es_clk.sample_frequency));
@@ -63,67 +63,84 @@ esp_err_t es8311_codec_init(void) {
 std::vector<String> mp3Files;
 int currentMp3Index = 0;
 
-void audio_task(void *param) {
+void audio_task(void *param)
+{
   SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-  if (!SD_MMC.begin("/sdcard", true)) {
+  if (!SD_MMC.begin("/sdcard", true))
+  {
     Serial.println("SD Card init failed!");
     vTaskDelete(NULL);
   }
 
   Wire.begin(IIC_SDA, IIC_SCL);
-  if (es8311_codec_init() != ESP_OK) {
+  if (es8311_codec_init() != ESP_OK)
+  {
     Serial.println("ES8311 init failed!");
     vTaskDelete(NULL);
   }
-  
+
   delay(100);
 
   audio.setPinout(BCLKPIN, WSPIN, DIPIN, MCLKPIN);
   audio.setVolume(6);
-  
+
   delay(100);
-  
+
   File root = SD_MMC.open("/");
-  if (root) {
+  if (root)
+  {
     File file = root.openNextFile();
-    while (file) {
+    while (file)
+    {
       String fileName = String(file.name());
-      if (!file.isDirectory() && fileName.endsWith(".mp3")) {
+      if (!file.isDirectory() && fileName.endsWith(".mp3"))
+      {
         mp3Files.push_back("/" + fileName);
         Serial.println("Found: " + fileName);
       }
       file = root.openNextFile();
     }
   }
-  
-  if (mp3Files.size() > 0) {
+
+  if (mp3Files.size() > 0)
+  {
     audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
     Serial.println("Playing: " + mp3Files[currentMp3Index]);
-  } else {
+  }
+  else
+  {
     Serial.println("No MP3 files found!");
   }
-  
-  while (1) {
+
+  while (1)
+  {
     audio.loop();
     vTaskDelay(1);
   }
 }
 
 #if LV_USE_LOG != 0
-void my_print(const char *buf) {
+void my_print(const char *buf)
+{
   Serial.printf(buf);
   Serial.flush();
 }
 #endif
 
-void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area) {
-  if(area->x1 % 2 != 0) area->x1--;
-  if(area->y1 % 2 != 0) area->y1--;
-  if(area->x2 % 2 == 0) area->x2++;
-  if(area->y2 % 2 == 0) area->y2++;
+void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
+{
+  if (area->x1 % 2 != 0)
+    area->x1--;
+  if (area->y1 % 2 != 0)
+    area->y1--;
+  if (area->x2 % 2 == 0)
+    area->x2++;
+  if (area->y2 % 2 == 0)
+    area->y2++;
 }
 
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
+{
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 #if (LV_COLOR_16_SWAP != 0)
@@ -134,18 +151,23 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
   lv_disp_flush_ready(disp);
 }
 
-void example_increase_lvgl_tick(void *arg) {
+void example_increase_lvgl_tick(void *arg)
+{
   lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
 }
 
-void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
+void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
+{
   uint8_t touched = CST9217.getPoint(x, y, CST9217.getSupportTouchPoint());
-  if (touched > 0) {
+  if (touched > 0)
+  {
     data->state = LV_INDEV_STATE_PR;
     data->point.x = x[0];
     data->point.y = y[0];
     Serial.printf("X:%d Y:%d\n", x[0], y[0]);
-  } else {
+  }
+  else
+  {
     data->state = LV_INDEV_STATE_REL;
   }
 }
@@ -155,12 +177,13 @@ XPowersPMU power;
 bool pmu_flag = false;
 bool adc_switch = false;
 
-void IRAM_ATTR pmuIrqHandler() {
+void IRAM_ATTR pmuIrqHandler()
+{
   pmu_flag = true;
 }
 
-
-void adcOn() {
+void adcOn()
+{
   power.enableTemperatureMeasure();
   // Enable internal ADC detection
   power.enableBattDetection();
@@ -169,7 +192,8 @@ void adcOn() {
   power.enableSystemVoltageMeasure();
 }
 
-void adcOff() {
+void adcOff()
+{
   power.disableTemperatureMeasure();
   // Enable internal ADC detection
   power.disableBattDetection();
@@ -178,7 +202,8 @@ void adcOff() {
   power.disableSystemVoltageMeasure();
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   delay(4000);
   pinMode(PA, OUTPUT);
@@ -190,15 +215,17 @@ void setup() {
   expander = new ESP_IOExpander_TCA95xx_8bit(I2C_NUM_0, TCA9554_I2C_ADDRESS, IIC_SCL, IIC_SDA);
   expander->init();
   expander->begin();
-  
+
   // 配置扩展IO的5号引脚为输入，用于检测PMU中断
   expander->pinMode(PMU_IRQ_PIN, INPUT);
 
   bool result = power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
 
-  if (result == false) {
+  if (result == false)
+  {
     Serial.println("PMU is not online...");
-    while (1) delay(50);
+    while (1)
+      delay(50);
   }
   Serial.println("PMU getID:" + String(power.getChipID(), HEX));
 
@@ -208,14 +235,14 @@ void setup() {
   // 获取系统电压过低保护电压
   Serial.printf("System Power Down Voltage: %u mV\n", power.getSysPowerDownVoltage());
 
-  // 设置 电源键开机时间 长按2秒开机
-  const char* powerOn[] = {"128ms", "512ms", "1000ms", "2000ms"};
-  power.setPowerKeyPressOnTime(XPOWERS_POWERON_2S);
+  // 设置 电源键开机时间 长按1秒开机
+  const char *powerOn[] = {"128ms", "512ms", "1000ms", "2000ms"};
+  power.setPowerKeyPressOnTime(XPOWERS_POWERON_1S);
   uint8_t opt = power.getPowerKeyPressOnTime();
   Serial.printf("PowerKeyPressOnTime: %s\n", powerOn[opt]);
 
   // 设置 电源键关机时间
-  const char* powerOff[] = {"4", "6", "8", "10"};
+  const char *powerOff[] = {"4", "6", "8", "10"};
   power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_6S);
   opt = power.getPowerKeyPressOffTime();
   Serial.printf("PowerKeyPressOffTime: %s Second\n", powerOff[opt]);
@@ -234,20 +261,21 @@ void setup() {
   power.setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_50MA);
 
   // 设置恒流充电电流（根据你的电池容量调整，建议 200-500mA）
-  power.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);  // 改为 500mA
+  power.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA); // 改为 500mA
 
   // 设置充电终止电流 25mA
   power.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
-
 
   power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
   // Clear all interrupt flags
   power.clearIrqStatus();
   // Enable the required interrupt function
   power.enableIRQ(
-    XPOWERS_AXP2101_PKEY_SHORT_IRQ  //POWER KEY
-    | XPOWERS_AXP2101_PKEY_LONG_IRQ
-  );
+       XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ // POWER KEY
+      | XPOWERS_AXP2101_BAT_CHG_DONE_IRQ | XPOWERS_AXP2101_BAT_CHG_START_IRQ  // CHARGE
+      | XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ   // BATTERY
+      | XPOWERS_AXP2101_PKEY_POSITIVE_IRQ | XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ // 电源按键的上升沿 下降沿
+    );
 
   adcOn();
   CST9217.begin(Wire, touchAddress, IIC_SDA, IIC_SCL);
@@ -290,47 +318,83 @@ void setup() {
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
-    .callback = &example_increase_lvgl_tick,
-    .name = "lvgl_tick"
-  };
+      .callback = &example_increase_lvgl_tick,
+      .name = "lvgl_tick"};
 
   esp_timer_handle_t lvgl_tick_timer = NULL;
   esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
-  lv_demo_widgets();  // 你也可以换成其他 demo
+  lv_demo_widgets(); // 你也可以换成其他 demo
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
   Serial.println("Setup complete.");
 }
 
-void loop() {
+void loop()
+{
   lv_timer_handler();
   delay(5);
-  
+
   // 检测扩展IO的PMU中断引脚
-  if (expander->digitalRead(PMU_IRQ_PIN) == LOW) {
+  if (expander->digitalRead(PMU_IRQ_PIN) == LOW)
+  {
     pmu_flag = true;
   }
-  
-  if (pmu_flag) {
+
+  if (pmu_flag)
+  {
     pmu_flag = false;
     uint32_t status = power.getIrqStatus();
-    if (power.isPekeyShortPressIrq()) {
-      if (adc_switch) {
+    if (power.isPekeyShortPressIrq())
+    {
+      if (adc_switch)
+      {
         adcOn();
         Serial.println("Enable ADC\n\n\n");
-      } else {
+      }
+      else
+      {
         adcOff();
         Serial.println("Disable ADC\n\n\n");
       }
       adc_switch = !adc_switch;
     }
-    if(power.isPekeyLongPressIrq()) {
-      Serial.println("Long Press Power Key - Shutting down...\n\n\n");
+    if (power.isPekeyLongPressIrq())
+    {
+      Serial.println("Long Press Power Key\n\n\n");
       // power.shutdown();
-    }  
+    }
+    if (power.isBatInsertIrq())
+    {
+      Serial.println("isBatInsert\n\n\n");
+    }
+    if (power.isBatRemoveIrq())
+    {
+      Serial.println("isBatRemove\n\n\n");
+    }
+    if (power.isBatChargeDoneIrq())
+    {
+      Serial.println("isBatChargeDone\n\n\n");
+    }
+    if (power.isBatChargeStartIrq())
+    {
+      Serial.println("isBatChargeStart\n\n\n");
+    }
+    if (power.isBatOverVoltageIrq())
+    {
+      Serial.println("isBatOverVoltage\n\n\n");
+    }
+    if (power.isPekeyNegativeIrq())
+    {
+      Serial.println("isPekeyNegative\n\n\n");
+    }
+    if (power.isPekeyPositiveIrq())
+    {
+      Serial.println("isPekeyPositive\n\n\n");
+    }
+
     power.clearIrqStatus();
   }
 
@@ -345,84 +409,113 @@ void loop() {
   info += "isVbusIn: " + String(power.isVbusIn() ? "YES" : "NO") + "\n";
   info += "isVbusGood: " + String(power.isVbusGood() ? "YES" : "NO") + "\n";
 
-  switch (charge_status) {
-    case XPOWERS_AXP2101_CHG_TRI_STATE:
-      info += "Charger Status: tri_charge\n";
-      break;
-    case XPOWERS_AXP2101_CHG_PRE_STATE:
-      info += "Charger Status: pre_charge\n";
-      break;
-    case XPOWERS_AXP2101_CHG_CC_STATE:
-      info += "Charger Status: constant charge\n";
-      break;
-    case XPOWERS_AXP2101_CHG_CV_STATE:
-      info += "Charger Status: constant voltage\n";
-      break;
-    case XPOWERS_AXP2101_CHG_DONE_STATE:
-      info += "Charger Status: charge done\n";
-      break;
-    case XPOWERS_AXP2101_CHG_STOP_STATE:
-      info += "Charger Status: not charging\n";
-      break;
+  switch (charge_status)
+  {
+  case XPOWERS_AXP2101_CHG_TRI_STATE:
+    info += "Charger Status: tri_charge\n";
+    break;
+  case XPOWERS_AXP2101_CHG_PRE_STATE:
+    info += "Charger Status: pre_charge\n";
+    break;
+  case XPOWERS_AXP2101_CHG_CC_STATE:
+    info += "Charger Status: constant charge\n";
+    break;
+  case XPOWERS_AXP2101_CHG_CV_STATE:
+    info += "Charger Status: constant voltage\n";
+    break;
+  case XPOWERS_AXP2101_CHG_DONE_STATE:
+    info += "Charger Status: charge done\n";
+    break;
+  case XPOWERS_AXP2101_CHG_STOP_STATE:
+    info += "Charger Status: not charging\n";
+    break;
   }
 
   info += "Battery Voltage: " + String(power.getBattVoltage()) + "mV\n";
   info += "Vbus Voltage: " + String(power.getVbusVoltage()) + "mV\n";
   info += "System Voltage: " + String(power.getSystemVoltage()) + "mV\n";
 
-  if (power.isBatteryConnect()) {
+  if (power.isBatteryConnect())
+  {
     int percent = power.getBatteryPercent();
-    if (percent == 0) {
+    if (percent == 0)
+    {
       int voltage = power.getBattVoltage();
-      if (voltage > 4100) percent = 100;
-      else if (voltage > 3900) percent = 75;
-      else if (voltage > 3700) percent = 50;
-      else if (voltage > 3500) percent = 25;
-      else percent = 10;
+      if (voltage > 4100)
+        percent = 100;
+      else if (voltage > 3900)
+        percent = 75;
+      else if (voltage > 3700)
+        percent = 50;
+      else if (voltage > 3500)
+        percent = 25;
+      else
+        percent = 10;
     }
     info += "Battery Percent: " + String(percent) + "%\n";
   }
   // Serial.println(info);
 }
 
-
-
 // optional
-void audio_info(const char *info){
-    Serial.print("info        "); Serial.println(info);
+void audio_info(const char *info)
+{
+  Serial.print("info        ");
+  Serial.println(info);
 }
-void audio_id3data(const char *info){  //id3 metadata
-    Serial.print("id3data     ");Serial.println(info);
+void audio_id3data(const char *info)
+{ // id3 metadata
+  Serial.print("id3data     ");
+  Serial.println(info);
 }
-void audio_eof_mp3(const char *info){  //end of file
-    Serial.print("eof_mp3     ");Serial.println(info);
-    if (mp3Files.size() > 0) {
-      currentMp3Index = (currentMp3Index + 1) % mp3Files.size();
-      audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
-      Serial.println("Playing: " + mp3Files[currentMp3Index]);
-    }
+void audio_eof_mp3(const char *info)
+{ // end of file
+  Serial.print("eof_mp3     ");
+  Serial.println(info);
+  if (mp3Files.size() > 0)
+  {
+    currentMp3Index = (currentMp3Index + 1) % mp3Files.size();
+    audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
+    Serial.println("Playing: " + mp3Files[currentMp3Index]);
+  }
 }
-void audio_showstation(const char *info){
-    Serial.print("station     ");Serial.println(info);
+void audio_showstation(const char *info)
+{
+  Serial.print("station     ");
+  Serial.println(info);
 }
-void audio_showstreaminfo(const char *info){
-    Serial.print("streaminfo  ");Serial.println(info);
+void audio_showstreaminfo(const char *info)
+{
+  Serial.print("streaminfo  ");
+  Serial.println(info);
 }
-void audio_showstreamtitle(const char *info){
-    Serial.print("streamtitle ");Serial.println(info);
+void audio_showstreamtitle(const char *info)
+{
+  Serial.print("streamtitle ");
+  Serial.println(info);
 }
-void audio_bitrate(const char *info){
-    Serial.print("bitrate     ");Serial.println(info);
+void audio_bitrate(const char *info)
+{
+  Serial.print("bitrate     ");
+  Serial.println(info);
 }
-void audio_commercial(const char *info){  //duration in sec
-    Serial.print("commercial  ");Serial.println(info);
+void audio_commercial(const char *info)
+{ // duration in sec
+  Serial.print("commercial  ");
+  Serial.println(info);
 }
-void audio_icyurl(const char *info){  //homepage
-    Serial.print("icyurl      ");Serial.println(info);
+void audio_icyurl(const char *info)
+{ // homepage
+  Serial.print("icyurl      ");
+  Serial.println(info);
 }
-void audio_lasthost(const char *info){  //stream URL played
-    Serial.print("lasthost    ");Serial.println(info);
+void audio_lasthost(const char *info)
+{ // stream URL played
+  Serial.print("lasthost    ");
+  Serial.println(info);
 }
-void audio_eof_speech(const char *info){
-    Serial.print("eof_speech  ");Serial.println(info);
+void audio_eof_speech(const char *info)
+{
+  Serial.print("eof_speech  ");
+  Serial.println(info);
 }
