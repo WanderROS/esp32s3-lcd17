@@ -32,6 +32,7 @@ uint32_t screenHeight;
 static lv_disp_draw_buf_t draw_buf;
 
 lv_obj_t *label; // Global label object
+lv_disp_t *disp; // Global display object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
 
@@ -39,6 +40,10 @@ SensorQMI8658 qmi;
 
 IMUdata acc;
 IMUdata gyr;
+float angleX = 1;
+float angleY = 0;
+
+bool rotation = false;
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -348,7 +353,8 @@ void setup()
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.rounder_cb = example_lvgl_rounder_cb;
   disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
+  disp_drv.sw_rotate = 1;
+  disp = lv_disp_drv_register(&disp_drv);
 
   static lv_indev_drv_t indev_drv;
   lv_indev_drv_init(&indev_drv);
@@ -382,31 +388,44 @@ void loop()
 
   if (qmi.getDataReady())
   {
-    // if (qmi.getAccelerometer(acc.x, acc.y, acc.z))
-    // {
-    //   Serial.print("{ACCEL: ");
-    //   Serial.print(acc.x);
-    //   Serial.print(",");
-    //   Serial.print(acc.y);
-    //   Serial.print(",");
-    //   Serial.print(acc.z);
-    //   Serial.println("}");
-    // }
-
-    if (qmi.getGyroscope(gyr.x, gyr.y, gyr.z))
+    if (qmi.getAccelerometer(acc.x, acc.y, acc.z))
     {
-      Serial.print("{GYRO: ");
-      Serial.print(gyr.x);
-      Serial.print(",");
-      Serial.print(gyr.y);
-      Serial.print(",");
-      Serial.print(gyr.z);
-      Serial.println("}");
+      angleX = acc.x;
+      angleY = acc.y;
+      if (angleX > 0.8 && !rotation)
+      {
+        lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
+        rotation = true;
+         Serial.println("翻转屏幕1");
+      }
+      else if (angleX < -0.8 && !rotation)
+      {
+        lv_disp_set_rotation(disp, LV_DISP_ROT_180);
+        rotation = true;
+         Serial.println("翻转屏幕2");
+      }
+      else if (angleY < -0.8 && !rotation)
+      {
+        lv_disp_set_rotation(disp, LV_DISP_ROT_270);
+        rotation = true;
+         Serial.println("翻转屏幕3");
+      }
+      else if (angleY > 0.8 && !rotation)
+      {
+        lv_disp_set_rotation(disp, LV_DISP_ROT_90);
+        rotation = true;
+        Serial.println("翻转屏幕4");
+      }
+      if ((angleX <= 0.8 && angleX >= -0.8) && (angleY <= 0.8 && angleY >= -0.8))
+      {
+        rotation = false; // 允许重新执行旋转
+      }
     }
   }
 
   if (millis() - lastMillis > 1000)
   {
+    Serial.println("accx:" + String(angleX) + " accy:" + String(angleY) + "\n");
     lastMillis = millis();
     RTC_DateTime datetime = rtc.getDateTime();
     // Serial.printf(" Year :");
