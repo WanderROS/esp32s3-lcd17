@@ -180,7 +180,7 @@ void audio_task(void *param) {
         file.write((uint8_t*)"WAVE", 4);
         file.write((uint8_t*)"fmt ", 4);
         uint32_t fmtSize = 16;
-        uint16_t audioFormat = 1, channels = 1, bitsPerSample = 16;
+        uint16_t audioFormat = 1, channels = 2, bitsPerSample = 16;
         uint32_t sampleRate = EXAMPLE_SAMPLE_RATE, byteRate = sampleRate * channels * bitsPerSample / 8;
         uint16_t blockAlign = channels * bitsPerSample / 8;
         file.write((uint8_t*)&fmtSize, 4);
