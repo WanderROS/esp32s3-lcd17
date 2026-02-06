@@ -11,6 +11,7 @@
 #include "es8311.h"
 #include "XPowersLib.h"
 #include "SensorPCF85063.hpp"
+#include "SensorQMI8658.hpp"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -25,16 +26,19 @@ ESP_IOExpander *expander = nullptr;
 #define TCA9554_I2C_ADDRESS 0x20
 #define PMU_IRQ_PIN 5
 
-
-
 uint32_t screenWidth;
 uint32_t screenHeight;
 
 static lv_disp_draw_buf_t draw_buf;
 
-lv_obj_t *label;  // Global label object
+lv_obj_t *label; // Global label object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
+
+SensorQMI8658 qmi;
+
+IMUdata acc;
+IMUdata gyr;
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -236,9 +240,11 @@ void setup()
   }
   Serial.println("PMU getID:" + String(power.getChipID(), HEX));
 
-  if (!rtc.begin(Wire, IIC_SDA, IIC_SCL)) {
+  if (!rtc.begin(Wire, IIC_SDA, IIC_SCL))
+  {
     Serial.println("Failed to find PCF8563 - check your wiring!");
-    while (1) {
+    while (1)
+    {
       delay(1000);
     }
   }
@@ -251,6 +257,21 @@ void setup()
   uint8_t second = 41;
 
   rtc.setDateTime(year, month, day, hour, minute, second);
+
+  if (!qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL))
+  {
+    Serial.println("Failed to find QMI8658 - check your wiring!");
+    while (1)
+    {
+      delay(1000);
+    }
+  }
+
+  qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_1000Hz, SensorQMI8658::LPF_MODE_0);
+  qmi.enableAccelerometer();
+  qmi.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS, SensorQMI8658::GYR_ODR_7174_4Hz, SensorQMI8658::LPF_MODE_0);
+  qmi.enableGyroscope();
+
   //  设置系统电压过低保护
   //  范围: 2600~3300mV
   power.setSysPowerDownVoltage(3300);
@@ -293,11 +314,11 @@ void setup()
   power.clearIrqStatus();
   // Enable the required interrupt function
   power.enableIRQ(
-       XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ // POWER KEY
+      XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ          // POWER KEY
       | XPOWERS_AXP2101_BAT_CHG_DONE_IRQ | XPOWERS_AXP2101_BAT_CHG_START_IRQ  // CHARGE
-      | XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ   // BATTERY
+      | XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ       // BATTERY
       | XPOWERS_AXP2101_PKEY_POSITIVE_IRQ | XPOWERS_AXP2101_PKEY_NEGATIVE_IRQ // 电源按键的上升沿 下降沿
-    );
+  );
 
   adcOn();
   CST9217.begin(Wire, touchAddress, IIC_SDA, IIC_SCL);
@@ -359,21 +380,47 @@ void loop()
   lv_timer_handler();
   delay(5);
 
-    if (millis() - lastMillis > 1000) {
+  if (qmi.getDataReady())
+  {
+    // if (qmi.getAccelerometer(acc.x, acc.y, acc.z))
+    // {
+    //   Serial.print("{ACCEL: ");
+    //   Serial.print(acc.x);
+    //   Serial.print(",");
+    //   Serial.print(acc.y);
+    //   Serial.print(",");
+    //   Serial.print(acc.z);
+    //   Serial.println("}");
+    // }
+
+    if (qmi.getGyroscope(gyr.x, gyr.y, gyr.z))
+    {
+      Serial.print("{GYRO: ");
+      Serial.print(gyr.x);
+      Serial.print(",");
+      Serial.print(gyr.y);
+      Serial.print(",");
+      Serial.print(gyr.z);
+      Serial.println("}");
+    }
+  }
+
+  if (millis() - lastMillis > 1000)
+  {
     lastMillis = millis();
     RTC_DateTime datetime = rtc.getDateTime();
-    Serial.printf(" Year :");
-    Serial.print(datetime.getYear());
-    Serial.printf(" Month:");
-    Serial.print(datetime.getMonth());
-    Serial.printf(" Day :");
-    Serial.print(datetime.getDay());
-    Serial.printf(" Hour:");
-    Serial.print(datetime.getHour());
-    Serial.printf(" Minute:");
-    Serial.print(datetime.getMinute());
-    Serial.printf(" Sec :");
-    Serial.println(datetime.getSecond());
+    // Serial.printf(" Year :");
+    // Serial.print(datetime.getYear());
+    // Serial.printf(" Month:");
+    // Serial.print(datetime.getMonth());
+    // Serial.printf(" Day :");
+    // Serial.print(datetime.getDay());
+    // Serial.printf(" Hour:");
+    // Serial.print(datetime.getHour());
+    // Serial.printf(" Minute:");
+    // Serial.print(datetime.getMinute());
+    // Serial.printf(" Sec :");
+    // Serial.println(datetime.getSecond());
 
     char buf[32];
     snprintf(buf, sizeof(buf), "%02d:%02d:%02d\n%02d-%02d-%04d",
