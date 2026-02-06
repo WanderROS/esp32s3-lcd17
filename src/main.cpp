@@ -211,10 +211,14 @@ void audio_task(void *param) {
       }
       
       Serial.println("播放...");
+      int16_t *playback_buffer = (int16_t *)heap_caps_malloc(RECORD_BUFFER_SIZE * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
       for (int i = 0; i < RECORD_BUFFER_SIZE; i++) {
-        record_buffer[i] = record_buffer[i] * 2;
+        int16_t sample = record_buffer[i] * 2;
+        playback_buffer[i * 2] = sample;
+        playback_buffer[i * 2 + 1] = sample;
       }
-      i2s.write((uint8_t *)record_buffer, RECORD_BUFFER_SIZE * sizeof(int16_t));
+      i2s.write((uint8_t *)playback_buffer, RECORD_BUFFER_SIZE * 2 * sizeof(int16_t));
+      heap_caps_free(playback_buffer);
       Serial.println("完成，继续监听...");
       
       vTaskDelay(pdMS_TO_TICKS(200));
