@@ -187,16 +187,49 @@ void setup() {
     Serial.println("PMU is not online...");
     while (1) delay(50);
   }
+  Serial.println("PMU getID:" + String(power.getChipID(), HEX));
 
   setFlag();
 
-  // 配置长按开机时间 (128ms, 512ms, 1s, 2s)
+  //  设置系统电压过低保护
+  //  范围: 2600~3300mV
+  power.setSysPowerDownVoltage(3300);
+  // 获取系统电压过低保护电压
+  Serial.printf("System Power Down Voltage: %u mV\n", power.getSysPowerDownVoltage());
+
+  // 设置 电源键开机时间 长按2秒开机
+  const char* powerOn[] = {"128ms", "512ms", "1000ms", "2000ms"};
   power.setPowerKeyPressOnTime(XPOWERS_POWERON_2S);
-  // 配置长按检测时间 - 触发 isPekeyLongPressIrq (1s, 1.5s, 2s, 2.5s)
-  power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
+  uint8_t opt = power.getPowerKeyPressOnTime();
+  Serial.printf("PowerKeyPressOnTime: %s\n", powerOn[opt]);
+
+  // 设置 电源键关机时间
+  const char* powerOff[] = {"4", "6", "8", "10"};
+  power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_6S);
+  opt = power.getPowerKeyPressOffTime();
+  Serial.printf("PowerKeyPressOffTime: %s Second\n", powerOff[opt]);
+
+  // 禁用 TS 引脚检测（适用于没有电池温度传感器的板子）
+  // 否则会导致充电异常
+  power.disableTSPinMeasure();
+
+  // 设置充电指示LED模式 常亮
+  power.setChargingLedMode(XPOWERS_CHG_LED_ON);
+
+  // 设置充电截止电压为 4.1V
+  power.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V1);
+
+  // 设置预充电电流 50mA
+  power.setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_50MA);
+
+  // 设置恒流充电电流（根据你的电池容量调整，建议 200-500mA）
+  power.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_500MA);  // 改为 500mA
+
+  // 设置充电终止电流 25mA
+  power.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
+
 
   power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
-  power.setChargeTargetVoltage(3);
   // Clear all interrupt flags
   power.clearIrqStatus();
   // Enable the required interrupt function
@@ -281,7 +314,7 @@ void loop() {
     }
     if(power.isPekeyLongPressIrq()) {
       Serial.println("Long Press Power Key - Shutting down...\n\n\n");
-      power.shutdown();
+      // power.shutdown();
     }  
     power.clearIrqStatus();
   }
@@ -334,7 +367,7 @@ void loop() {
     }
     info += "Battery Percent: " + String(percent) + "%\n";
   }
-  // Serial.println(info);
+  Serial.println(info);
 }
 
 
