@@ -10,6 +10,7 @@
 #include "esp_check.h"
 #include "es8311.h"
 #include "XPowersLib.h"
+#include "SensorPCF85063.hpp"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -24,10 +25,16 @@ ESP_IOExpander *expander = nullptr;
 #define TCA9554_I2C_ADDRESS 0x20
 #define PMU_IRQ_PIN 5
 
+
+
 uint32_t screenWidth;
 uint32_t screenHeight;
 
 static lv_disp_draw_buf_t draw_buf;
+
+lv_obj_t *label;  // Global label object
+SensorPCF85063 rtc;
+uint32_t lastMillis;
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -229,6 +236,21 @@ void setup()
   }
   Serial.println("PMU getID:" + String(power.getChipID(), HEX));
 
+  if (!rtc.begin(Wire, IIC_SDA, IIC_SCL)) {
+    Serial.println("Failed to find PCF8563 - check your wiring!");
+    while (1) {
+      delay(1000);
+    }
+  }
+  Serial.println("Found PCF8563 RTC");
+  uint16_t year = 2026;
+  uint8_t month = 2;
+  uint8_t day = 6;
+  uint8_t hour = 19;
+  uint8_t minute = 53;
+  uint8_t second = 41;
+
+  rtc.setDateTime(year, month, day, hour, minute, second);
   //  设置系统电压过低保护
   //  范围: 2600~3300mV
   power.setSysPowerDownVoltage(3300);
@@ -313,7 +335,7 @@ void setup()
   indev_drv.read_cb = my_touchpad_read;
   lv_indev_drv_register(&indev_drv);
 
-  lv_obj_t *label = lv_label_create(lv_scr_act());
+  label = lv_label_create(lv_scr_act());
   lv_label_set_text(label, "Hello Arduino and LVGL!");
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
@@ -325,7 +347,7 @@ void setup()
   esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
-  lv_demo_widgets(); // 你也可以换成其他 demo
+  // lv_demo_widgets(); // 你也可以换成其他 demo
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
@@ -336,6 +358,32 @@ void loop()
 {
   lv_timer_handler();
   delay(5);
+
+    if (millis() - lastMillis > 1000) {
+    lastMillis = millis();
+    RTC_DateTime datetime = rtc.getDateTime();
+    Serial.printf(" Year :");
+    Serial.print(datetime.getYear());
+    Serial.printf(" Month:");
+    Serial.print(datetime.getMonth());
+    Serial.printf(" Day :");
+    Serial.print(datetime.getDay());
+    Serial.printf(" Hour:");
+    Serial.print(datetime.getHour());
+    Serial.printf(" Minute:");
+    Serial.print(datetime.getMinute());
+    Serial.printf(" Sec :");
+    Serial.println(datetime.getSecond());
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d\n%02d-%02d-%04d",
+             datetime.getHour(), datetime.getMinute(), datetime.getSecond(),
+             datetime.getDay(), datetime.getMonth(), datetime.getYear());
+
+    // Update label with current time
+    lv_label_set_text(label, buf);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_40, LV_PART_MAIN);
+  }
 
   // 检测扩展IO的PMU中断引脚
   if (expander->digitalRead(PMU_IRQ_PIN) == LOW)
