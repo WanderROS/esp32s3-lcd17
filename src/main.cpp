@@ -15,6 +15,25 @@
 #include "esp_partition.h"
 #include "SD_MMC.h"
 
+
+// Generated using the following command:
+// python3 tools/gen_sr_commands.py "Turn on the light,Switch on the light;Turn off the light,Switch off the light,Go dark;Start fan;Stop fan"
+enum {
+  SR_CMD_TURN_ON_THE_LIGHT,
+  SR_CMD_TURN_OFF_THE_LIGHT,
+  SR_CMD_START_FAN,
+  SR_CMD_STOP_FAN,
+};
+static const sr_cmd_t sr_commands[] = {
+  {0, "Turn on the light", "TkN nN jc LiT"},
+  {0, "Switch on the light", "SWgp nN jc LiT"},
+  {1, "Turn off the light", "TkN eF jc LiT"},
+  {1, "Switch off the light", "SWgp eF jc LiT"},
+  {1, "Go dark", "Gb DnRK"},
+  {2, "Start fan", "STnRT FaN"},
+  {3, "Stop fan", "STnP FaN"},
+};
+
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
 #define MAX_TOUCH_POINTS 5
@@ -121,7 +140,7 @@ void audio_task(void *param) {
   switch (event) {
     case SR_EVENT_WAKEWORD:
       Serial.println("WakeWord Detected!");  // Wakeword detected
-      wake_detected = true;
+      // wake_detected = true;
       break;
     case SR_EVENT_WAKEWORD_CHANNEL:
       Serial.printf("WakeWord Channel %d Verified!\n", command_id);  // Specific wakeword channel verified
@@ -132,12 +151,7 @@ void audio_task(void *param) {
       ESP_SR.setMode(SR_MODE_WAKEWORD);     // Switch back to wakeword detection mode
       break;
     case SR_EVENT_COMMAND:
-      Serial.printf("Command %d \n", command_id);  // Command recognized
-      switch (command_id) {
-        default:
-          Serial.println("Unknown Command!");  // Unknown command received
-          break;
-      }
+      Serial.printf("Command %d Detected! %s\n", command_id, sr_commands[phrase_id].str);
       ESP_SR.setMode(SR_MODE_COMMAND);  // Allow for more commands to be given before timeout
       break;
     default:
@@ -145,7 +159,7 @@ void audio_task(void *param) {
       break;
   }});
 
-  if (!ESP_SR.begin(i2s, NULL, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD)) {
+  if (!ESP_SR.begin(i2s,sr_commands, sizeof(sr_commands) / sizeof(sr_cmd_t), SR_CHANNELS_STEREO, SR_MODE_WAKEWORD)) {
     Serial.println("ESP_SR init failed!");
     vTaskDelete(NULL);
   }
