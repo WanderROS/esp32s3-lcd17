@@ -141,8 +141,40 @@ void my_print(const char *buf)
 }
 #endif
 
+static uint8_t *rotated_buf = nullptr;
+
 void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
+  lv_display_rotation_t rotation = lv_display_get_rotation(disp);
+  lv_area_t rotated_area;
+  
+  if(rotation != LV_DISPLAY_ROTATION_0) {
+    lv_color_format_t cf = lv_display_get_color_format(disp);
+    rotated_area = *area;
+    lv_display_rotate_area(disp, &rotated_area);
+    
+    uint32_t src_stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), cf);
+    uint32_t dest_stride = lv_draw_buf_width_to_stride(lv_area_get_width(&rotated_area), cf);
+    
+    int32_t src_w = lv_area_get_width(area);
+    int32_t src_h = lv_area_get_height(area);
+    uint32_t buf_size = dest_stride * lv_area_get_height(&rotated_area);
+    
+    if(!rotated_buf) {
+      rotated_buf = (uint8_t*)heap_caps_malloc(screenWidth * screenHeight * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if(!rotated_buf) {
+        Serial.println("Failed to allocate rotation buffer!");
+        lv_display_flush_ready(disp);
+        return;
+      }
+    }
+    
+    lv_draw_sw_rotate(color_p, rotated_buf, src_w, src_h, src_stride, dest_stride, rotation, cf);
+    
+    area = &rotated_area;
+    color_p = rotated_buf;
+  }
+  
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 #if (LV_COLOR_16_SWAP != 0)
@@ -334,7 +366,7 @@ void setup()
   lv_display_set_flush_cb(disp, my_disp_flush);
   lv_display_set_buffers(disp, buf1, buf2, screenWidth * screenHeight / 4 * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-  // lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
+  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
 
   lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
