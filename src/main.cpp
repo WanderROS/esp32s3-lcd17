@@ -29,10 +29,8 @@ ESP_IOExpander *expander = nullptr;
 uint32_t screenWidth;
 uint32_t screenHeight;
 
-static lv_disp_draw_buf_t draw_buf;
-
 lv_obj_t *label; // Global label object
-lv_disp_t *disp; // Global display object
+lv_display_t *disp; // Global display object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
 
@@ -143,28 +141,16 @@ void my_print(const char *buf)
 }
 #endif
 
-void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
-{
-  if (area->x1 % 2 != 0)
-    area->x1--;
-  if (area->y1 % 2 != 0)
-    area->y1--;
-  if (area->x2 % 2 == 0)
-    area->x2++;
-  if (area->y2 % 2 == 0)
-    area->y2++;
-}
-
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
+void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 #if (LV_COLOR_16_SWAP != 0)
-  gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+  gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
 #else
-  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)color_p, w, h);
 #endif
-  lv_disp_flush_ready(disp);
+  lv_display_flush_ready(disp);
 }
 
 void example_increase_lvgl_tick(void *arg)
@@ -172,7 +158,7 @@ void example_increase_lvgl_tick(void *arg)
   lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
 }
 
-void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
+void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   uint8_t touched = CST9217.getPoint(x, y, CST9217.getSupportTouchPoint());
   if (touched > 0)
@@ -337,32 +323,22 @@ void setup()
 
   lv_init();
 
-  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
-  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
-
 #if LV_USE_LOG != 0
   lv_log_register_print_cb(my_print);
 #endif
 
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, screenWidth * screenHeight / 4);
+  disp = lv_display_create(screenWidth, screenHeight);
+  lv_display_set_flush_cb(disp, my_disp_flush);
+  
+  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  lv_display_set_buffers(disp, buf1, buf2, screenWidth * screenHeight / 4 * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = screenWidth;
-  disp_drv.ver_res = screenHeight;
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &draw_buf;
-  disp_drv.rounder_cb = example_lvgl_rounder_cb;
-  disp_drv.sw_rotate=1;
-  disp = lv_disp_drv_register(&disp_drv);
+  // lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
 
-  // lv_disp_set_rotation(disp, LV_DISP_ROT_180);
-
-  static lv_indev_drv_t indev_drv;
-  lv_indev_drv_init(&indev_drv);
-  indev_drv.type = LV_INDEV_TYPE_POINTER;
-  indev_drv.read_cb = my_touchpad_read;
-  lv_indev_drv_register(&indev_drv);
+  lv_indev_t *indev = lv_indev_create();
+  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(indev, my_touchpad_read);
 
   label = lv_label_create(lv_scr_act());
   lv_label_set_text(label, "Hello Arduino and LVGL!");
