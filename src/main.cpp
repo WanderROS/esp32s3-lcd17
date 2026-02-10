@@ -42,6 +42,7 @@ float angleX = 1;
 float angleY = 0;
 
 bool rotation = false;
+static uint8_t current_rotation = 1; // 0=0°, 1=90°, 2=180°, 3=270°
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -476,17 +477,10 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      if (adc_switch)
-      {
-        adcOn();
-        Serial.println("Enable ADC\n\n\n");
-      }
-      else
-      {
-        adcOff();
-        Serial.println("Disable ADC\n\n\n");
-      }
-      adc_switch = !adc_switch;
+      current_rotation = (current_rotation + 1) % 4;
+      lv_display_rotation_t rotations[] = {LV_DISPLAY_ROTATION_0, LV_DISPLAY_ROTATION_90, LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270};
+      lv_display_set_rotation(disp, rotations[current_rotation]);
+      Serial.printf("Rotation: %d degrees\n", current_rotation * 90);
     }
     if (power.isPekeyLongPressIrq())
     {
