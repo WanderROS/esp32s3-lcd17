@@ -327,11 +327,11 @@ void setup()
   lv_log_register_print_cb(my_print);
 #endif
 
-  disp = lv_display_create(screenWidth, screenHeight);
-  lv_display_set_flush_cb(disp, my_disp_flush);
-  
   lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
   lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+
+  disp = lv_display_create(screenWidth, screenHeight);
+  lv_display_set_flush_cb(disp, my_disp_flush);
   lv_display_set_buffers(disp, buf1, buf2, screenWidth * screenHeight / 4 * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
   // lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_180);
@@ -340,8 +340,9 @@ void setup()
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, my_touchpad_read);
 
-  label = lv_label_create(lv_scr_act());
-  lv_label_set_text(label, "Hello Arduino and LVGL!");
+  label = lv_label_create(lv_screen_active());
+  lv_label_set_text(label, "Hello Wander!");
+  lv_obj_set_style_text_font(label, &lv_font_montserrat_40, LV_PART_MAIN);
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
@@ -358,7 +359,7 @@ void setup()
 
   Serial.println("Setup complete.");
 }
-
+char displayBuf[64];
 void loop()
 {
   lv_timer_handler();
@@ -403,7 +404,7 @@ void loop()
 
   if (millis() - lastMillis > 1000)
   {
-    Serial.println("accx:" + String(angleX) + " accy:" + String(angleY) + "\n");
+    // Serial.println("accx:" + String(angleX) + " accy:" + String(angleY) + "\n");
     lastMillis = millis();
     RTC_DateTime datetime = rtc.getDateTime();
     // Serial.printf(" Year :");
@@ -418,15 +419,17 @@ void loop()
     // Serial.print(datetime.getMinute());
     // Serial.printf(" Sec :");
     // Serial.println(datetime.getSecond());
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d\n%02d-%02d-%04d",
-             datetime.getHour(), datetime.getMinute(), datetime.getSecond(),
-             datetime.getDay(), datetime.getMonth(), datetime.getYear());
-
+ 
+    memset(displayBuf, 0, sizeof(displayBuf));
+    snprintf(displayBuf, sizeof(displayBuf), "%04d-%d-%d %d:%02d:%02d\0",
+             datetime.getYear(), datetime.getMonth(), datetime.getDay(),
+             datetime.getHour(), datetime.getMinute(), datetime.getSecond());
+                    
+    Serial.println(displayBuf);
+    
     // Update label with current time
-    lv_label_set_text(label, buf);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_40, LV_PART_MAIN);
+    // lv_label_set_text(label, displayBuf);
+    // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
   }
 
   // 检测扩展IO的PMU中断引脚
