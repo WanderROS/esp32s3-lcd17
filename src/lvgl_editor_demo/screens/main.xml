@@ -1,0 +1,8 @@
+<screen>
+	<view>
+		<lv_button align="center" height="100" width="100">
+			<lv_label text="button" align="center" />
+			<screen_create_event screen="second" />
+		</lv_button>
+	</view>
+</screen>

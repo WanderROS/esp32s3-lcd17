@@ -12,6 +12,7 @@
 #include "XPowersLib.h"
 #include "SensorPCF85063.hpp"
 #include "SensorQMI8658.hpp"
+#include "lvgl_editor_demo/lvgl_editor_demo.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -29,7 +30,7 @@ ESP_IOExpander *expander = nullptr;
 uint32_t screenWidth;
 uint32_t screenHeight;
 
-lv_obj_t *label; // Global label object
+lv_obj_t *label;    // Global label object
 lv_display_t *disp; // Global display object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
@@ -75,6 +76,13 @@ esp_err_t es8311_codec_init(void)
   return ESP_OK;
 }
 
+void second_button_ck(lv_event_t *e)
+{
+  Serial.println("Second Clicked!");
+  current_rotation = (current_rotation + 1) % 4;
+  lv_display_rotation_t rotations[] = {LV_DISPLAY_ROTATION_0, LV_DISPLAY_ROTATION_90, LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270};
+  lv_display_set_rotation(disp, rotations[current_rotation]);
+}
 std::vector<String> mp3Files;
 int currentMp3Index = 0;
 
@@ -148,34 +156,37 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p)
 {
   lv_display_rotation_t rotation = lv_display_get_rotation(disp);
   lv_area_t rotated_area;
-  
-  if(rotation != LV_DISPLAY_ROTATION_0) {
+
+  if (rotation != LV_DISPLAY_ROTATION_0)
+  {
     lv_color_format_t cf = lv_display_get_color_format(disp);
     rotated_area = *area;
     lv_display_rotate_area(disp, &rotated_area);
-    
+
     uint32_t src_stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), cf);
     uint32_t dest_stride = lv_draw_buf_width_to_stride(lv_area_get_width(&rotated_area), cf);
-    
+
     int32_t src_w = lv_area_get_width(area);
     int32_t src_h = lv_area_get_height(area);
     uint32_t buf_size = dest_stride * lv_area_get_height(&rotated_area);
-    
-    if(!rotated_buf) {
-      rotated_buf = (uint8_t*)heap_caps_malloc(screenWidth * screenHeight * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      if(!rotated_buf) {
+
+    if (!rotated_buf)
+    {
+      rotated_buf = (uint8_t *)heap_caps_malloc(screenWidth * screenHeight * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (!rotated_buf)
+      {
         Serial.println("Failed to allocate rotation buffer!");
         lv_display_flush_ready(disp);
         return;
       }
     }
-    
+
     lv_draw_sw_rotate(color_p, rotated_buf, src_w, src_h, src_stride, dest_stride, rotation, cf);
-    
+
     area = &rotated_area;
     color_p = rotated_buf;
   }
-  
+
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 #if (LV_COLOR_16_SWAP != 0)
@@ -387,6 +398,8 @@ void setup()
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
   // lv_demo_widgets(); // 你也可以换成其他 demo
+  lvgl_editor_demo_init("");
+  lv_screen_load(main_create());
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
@@ -452,14 +465,14 @@ void loop()
     // Serial.print(datetime.getMinute());
     // Serial.printf(" Sec :");
     // Serial.println(datetime.getSecond());
- 
+
     memset(displayBuf, 0, sizeof(displayBuf));
     snprintf(displayBuf, sizeof(displayBuf), "%04d-%d-%d %d:%02d:%02d\0",
              datetime.getYear(), datetime.getMonth(), datetime.getDay(),
              datetime.getHour(), datetime.getMinute(), datetime.getSecond());
-                    
+
     Serial.println(displayBuf);
-    
+
     // Update label with current time
     // lv_label_set_text(label, displayBuf);
     // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
