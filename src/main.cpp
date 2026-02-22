@@ -12,7 +12,7 @@
 #include "XPowersLib.h"
 #include "SensorPCF85063.hpp"
 #include "SensorQMI8658.hpp"
-#include "lvgl_editor_demo/lvgl_editor_demo.h"
+
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -43,7 +43,7 @@ float angleX = 1;
 float angleY = 0;
 
 bool rotation = false;
-static uint8_t current_rotation = 1; // 0=0°, 1=90°, 2=180°, 3=270°
+static uint8_t current_rotation = 3; // 0=0°, 1=90°, 2=180°, 3=270°
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -378,7 +378,7 @@ void setup()
   lv_display_set_flush_cb(disp, my_disp_flush);
   lv_display_set_buffers(disp, buf1, buf2, screenWidth * screenHeight / 4 * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
+  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0); // LV_DISPLAY_ROTATION_180 LV_DISPLAY_ROTATION_0 work well
 
   lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
@@ -398,8 +398,6 @@ void setup()
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
   // lv_demo_widgets(); // 你也可以换成其他 demo
-  lvgl_editor_demo_init("");
-  lv_screen_load(main_create());
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
@@ -474,7 +472,7 @@ void loop()
     Serial.println(displayBuf);
 
     // Update label with current time
-    // lv_label_set_text(label, displayBuf);
+    lv_label_set_text(label, displayBuf);
     // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
   }
 

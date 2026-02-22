@@ -1,7 +1,0 @@
-<project>
-	<targets>
-		<target name="waveshare_1_7">
-			<display width="466" height="466" />
-		</target>
-	</targets>
-</project>
