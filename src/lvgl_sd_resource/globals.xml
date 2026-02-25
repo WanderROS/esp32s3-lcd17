@@ -1,0 +1,27 @@
+<globals>
+	<api>
+		<!-- Add <enumdefs> here -->
+	</api>
+
+	<consts>
+		<!-- Add <px>, <int>, <color> etc here -->
+	</consts>
+
+	<styles>
+		<!-- Add <style> tags here -->
+	</styles>
+
+	<subjects>
+		<!-- Add <int>, <string>, or <float> subjects here -->
+	</subjects>
+
+	<images>
+		<!-- Add <file> or <data> tags here -->
+	</images>
+
+	<fonts>
+		<tiny_ttf as_file="true" src_path="fonts/QingNiaoHuaGuangJianMeiHei-2.ttf" name="chinese_24" size="24" />
+		<tiny_ttf as_file="true" src_path="fonts/NotoSansTC-VariableFont_wght.ttf" name="english_24" size="24" />
+		<!-- Add <bin> , <tiny_ttf>, <freetype> tags here -->
+	</fonts>
+</globals>

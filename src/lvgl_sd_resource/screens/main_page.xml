@@ -1,0 +1,6 @@
+<screen>
+	<view>
+		<lv_label style_text_font="chinese_24" text="汉字" align="center" />
+		<lv_label text="English" style_text_font="english_24" align="center" y="-40" />
+	</view>
+</screen>

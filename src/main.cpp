@@ -7,11 +7,13 @@
 #include <Wire.h>
 #include "Audio.h"
 #include "SD_MMC.h"
+#include <cstdio>
 #include "esp_check.h"
 #include "es8311.h"
 #include "XPowersLib.h"
 #include "SensorPCF85063.hpp"
 #include "SensorQMI8658.hpp"
+#include "lvgl_sd_resource/lvgl_sd_resource.h"
 
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
@@ -88,10 +90,10 @@ int currentMp3Index = 0;
 
 void audio_task(void *param)
 {
-  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-  if (!SD_MMC.begin("/sdcard", true))
+  // SD卡已在setup()中初始化，这里不再重复
+  if (!SD_MMC.cardType())
   {
-    Serial.println("SD Card init failed!");
+    Serial.println("SD Card not available for audio!");
     vTaskDelete(NULL);
   }
 
@@ -143,12 +145,68 @@ void audio_task(void *param)
 }
 
 #if LV_USE_LOG != 0
-void my_print(const char *buf)
+void my_print(int8_t level, const char *buf)
 {
   Serial.printf(buf);
   Serial.flush();
 }
 #endif
+
+// ========== 手动注册 LVGL 文件系统驱动 (基于 C stdio) ==========
+static void *fs_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode)
+{
+  const char *flags = (mode == LV_FS_MODE_WR) ? "wb" : "rb";
+  char full_path[256];
+  snprintf(full_path, sizeof(full_path), "/sdcard/%s", path);
+  FILE *f = fopen(full_path, flags);
+  return f;
+}
+
+static lv_fs_res_t fs_close_cb(lv_fs_drv_t *drv, void *file_p)
+{
+  fclose((FILE *)file_p);
+  return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t fs_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br)
+{
+  *br = fread(buf, 1, btr, (FILE *)file_p);
+  return (*br > 0 || btr == 0) ? LV_FS_RES_OK : LV_FS_RES_UNKNOWN;
+}
+
+static lv_fs_res_t fs_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence)
+{
+  int w;
+  switch (whence)
+  {
+  case LV_FS_SEEK_SET: w = SEEK_SET; break;
+  case LV_FS_SEEK_CUR: w = SEEK_CUR; break;
+  case LV_FS_SEEK_END: w = SEEK_END; break;
+  default: return LV_FS_RES_INV_PARAM;
+  }
+  fseek((FILE *)file_p, pos, w);
+  return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t fs_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p)
+{
+  *pos_p = ftell((FILE *)file_p);
+  return LV_FS_RES_OK;
+}
+
+void lv_fs_sd_init(void)
+{
+  static lv_fs_drv_t drv;
+  lv_fs_drv_init(&drv);
+  drv.letter = 'A';
+  drv.open_cb = fs_open_cb;
+  drv.close_cb = fs_close_cb;
+  drv.read_cb = fs_read_cb;
+  drv.seek_cb = fs_seek_cb;
+  drv.tell_cb = fs_tell_cb;
+  lv_fs_drv_register(&drv);
+  Serial.println("LVGL FS driver 'A' registered.");
+}
 
 static uint8_t *rotated_buf = nullptr;
 
@@ -367,6 +425,30 @@ void setup()
 
   lv_init();
 
+  // 注册自定义文件系统驱动（直接内联，避免链接问题）
+  {
+    static lv_fs_drv_t fs_drv;
+    lv_fs_drv_init(&fs_drv);
+    fs_drv.letter = 'A';
+    fs_drv.open_cb = fs_open_cb;
+    fs_drv.close_cb = fs_close_cb;
+    fs_drv.read_cb = fs_read_cb;
+    fs_drv.seek_cb = fs_seek_cb;
+    fs_drv.tell_cb = fs_tell_cb;
+    lv_fs_drv_register(&fs_drv);
+
+    // 验证驱动是否注册成功
+    lv_fs_drv_t *check = lv_fs_get_drv('A');
+    if (check && check->open_cb)
+    {
+      Serial.println("LVGL FS driver 'A' registered OK, open_cb is set.");
+    }
+    else
+    {
+      Serial.printf("LVGL FS driver 'A' registration FAILED! drv=%p open_cb=%p\n", check, check ? (void *)check->open_cb : nullptr);
+    }
+  }
+
 #if LV_USE_LOG != 0
   lv_log_register_print_cb(my_print);
 #endif
@@ -384,10 +466,49 @@ void setup()
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, my_touchpad_read);
 
-  label = lv_label_create(lv_screen_active());
-  lv_label_set_text(label, "Hello Wander!");
-  lv_obj_set_style_text_font(label, &lv_font_montserrat_40, LV_PART_MAIN);
-  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  // 初始化SD卡（需要在LVGL文件系统使用前挂载）
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+  if (!SD_MMC.begin("/sdcard", true))
+  {
+    Serial.println("SD Card init failed!");
+  }
+  else
+  {
+    Serial.println("SD Card mounted.");
+    // 验证文件是否存在
+    FILE *f = fopen("/sdcard/assets/icon_pause.png", "r");
+    if (f)
+    {
+      fseek(f, 0, SEEK_END);
+      long size = ftell(f);
+      fclose(f);
+      Serial.printf("icon_pause.png found, size: %ld bytes\n", size);
+    }
+    else
+    {
+      Serial.println("ERROR: assets/icon_pause.png NOT found on SD card!");
+    }
+  }
+
+  // 从SD卡加载PNG图片并显示
+  // 图片路径格式: "A:路径/文件名.png"  (A驱动器对应 /sdcard 目录)
+  lv_obj_t *img = lv_image_create(lv_screen_active());
+  lv_image_set_src(img, "A:assets/icon_pause.png");
+  lv_obj_center(img);
+
+  // 调试：检查LVGL文件系统是否能打开文件
+  lv_fs_file_t lv_file;
+  lv_fs_res_t res = lv_fs_open(&lv_file, "A:assets/icon_pause.png", LV_FS_MODE_RD);
+  if (res == LV_FS_RES_OK)
+  {
+    Serial.println("LVGL FS: file opened OK");
+    lv_fs_close(&lv_file);
+  }
+  else
+  {
+    Serial.printf("LVGL FS: open FAILED, error code: %d\n", res);
+  }
+  lv_obj_center(img);
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
       .callback = &example_increase_lvgl_tick,
@@ -398,6 +519,8 @@ void setup()
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
   // lv_demo_widgets(); // 你也可以换成其他 demo
+  lvgl_sd_resource_init("A:assets/");
+  lv_screen_load(main_page_create());
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
@@ -472,7 +595,7 @@ void loop()
     Serial.println(displayBuf);
 
     // Update label with current time
-    lv_label_set_text(label, displayBuf);
+    // lv_label_set_text(label, displayBuf);
     // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
   }
 

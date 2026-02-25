@@ -457,7 +457,7 @@
  *-----------*/
 
 /** Enable log module */
-#define LV_USE_LOG 0
+#define LV_USE_LOG 1
 #if LV_USE_LOG
     /** Set value to one of the following levels of logging detail:
      *  - LV_LOG_LEVEL_TRACE    Log detailed information.
@@ -544,7 +544,7 @@
  *  If size is not set to 0, the decoder will fail to decode when the cache is full.
  *  If size is 0, the cache function is not enabled and the decoded memory will be
  *  released immediately after use. */
-#define LV_CACHE_DEF_SIZE       0
+#define LV_CACHE_DEF_SIZE       (64 * 1024)
 
 /** Default number of image header cache entries. The cache is used to store the headers of images
  *  The main logic is like `LV_CACHE_DEF_SIZE` but for image headers. */
@@ -979,7 +979,7 @@
 #endif
 
 /** LODEPNG decoder library */
-#define LV_USE_LODEPNG 0
+#define LV_USE_LODEPNG 1
 
 /** PNG decoder(libpng) library */
 #define LV_USE_LIBPNG 0
@@ -1032,10 +1032,10 @@
 #endif
 
 /** Built-in TTF decoder */
-#define LV_USE_TINY_TTF 0
+#define LV_USE_TINY_TTF 1
 #if LV_USE_TINY_TTF
     /* Enable loading TTF data from files */
-    #define LV_TINY_TTF_FILE_SUPPORT 0
+    #define LV_TINY_TTF_FILE_SUPPORT 1
     #define LV_TINY_TTF_CACHE_GLYPH_CNT 128
     #define LV_TINY_TTF_CACHE_KERNING_CNT 256
 #endif
