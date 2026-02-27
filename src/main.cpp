@@ -14,7 +14,7 @@
 #include "SensorPCF85063.hpp"
 #include "SensorQMI8658.hpp"
 #include "lvgl_sd_resource/lvgl_sd_resource.h"
-
+#include "menu/menu.h"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -306,6 +306,31 @@ void adcOff()
   power.disableSystemVoltageMeasure();
 }
 
+/* ---- 菜单项点击回调 ---- */
+static void on_menu_settings(lv_event_t *e)
+{
+    Serial.println("Menu: 设置");
+    // TODO: 在这里实现设置页面跳转
+}
+
+static void on_menu_music(lv_event_t *e)
+{
+    Serial.println("Menu: 音乐播放");
+    // TODO: 在这里实现音乐播放页面跳转
+}
+
+static void on_menu_wifi(lv_event_t *e)
+{
+    Serial.println("Menu: WiFi");
+    // TODO: 在这里实现 WiFi 配置页面
+}
+
+static void on_menu_weather(lv_event_t *e)
+{
+    Serial.println("Menu: 天气");
+    // TODO: 在这里实现天气页面跳转
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -520,7 +545,20 @@ void setup()
 
   // lv_demo_widgets(); // 你也可以换成其他 demo
   lvgl_sd_resource_init("A:assets/");
-  lv_screen_load(main_page_create());
+
+  /* 创建 XML 生成的主屏幕 */
+  lv_obj_t *main_scr = main_page_create();
+
+  /* 在主屏幕上添加功能菜单列表 */
+  static const menu_item_t menu_items[] = {
+      {LV_SYMBOL_SETTINGS,  "设置",     on_menu_settings,  NULL},
+      {LV_SYMBOL_AUDIO,     "音乐播放", on_menu_music,     NULL},
+      {LV_SYMBOL_WIFI,      "WiFi",     on_menu_wifi,      NULL},
+      {LV_SYMBOL_GPS,       "天气",     on_menu_weather,   NULL},
+  };
+  menu_create(main_scr, menu_items, sizeof(menu_items) / sizeof(menu_items[0]), chinese_24);
+
+  lv_screen_load(main_scr);
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
