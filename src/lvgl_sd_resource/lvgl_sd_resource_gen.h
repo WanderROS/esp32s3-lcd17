@@ -49,11 +49,32 @@ extern "C" {
 
 extern lv_font_t * chinese_24;
 
+extern lv_font_t * chinese_48;
+
 extern lv_font_t * english_24;
 
 /*----------------
  * Images
  *----------------*/
+
+extern const void * icon_plus;
+extern const void * icon_minus;
+extern const void * light_temp_arc_bg;
+extern const void * icon_heart;
+extern const void * icon_play;
+extern const void * icon_pause;
+extern const void * icon_skip_back;
+extern const void * icon_skip_forward;
+extern const void * icon_volume_max;
+extern const void * icon_volume_min;
+extern const void * icon_volume_none;
+extern const void * song_cover_1;
+extern const void * weather_location_1_bg;
+extern const void * weather_location_2_bg;
+extern const void * icon_cloudy;
+extern const void * icon_sunny;
+extern const void * icon_pin;
+extern const void * icon_theme;
 
 /*----------------
  * Subjects

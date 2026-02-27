@@ -309,7 +309,7 @@ void adcOff()
 void setup()
 {
   Serial.begin(115200);
-  delay(4000);
+  // delay(4000);
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
 
@@ -592,7 +592,7 @@ void loop()
              datetime.getYear(), datetime.getMonth(), datetime.getDay(),
              datetime.getHour(), datetime.getMinute(), datetime.getSecond());
 
-    Serial.println(displayBuf);
+    // Serial.println(displayBuf);
 
     // Update label with current time
     // lv_label_set_text(label, displayBuf);
