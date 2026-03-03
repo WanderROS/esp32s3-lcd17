@@ -478,12 +478,16 @@ void setup()
   lv_log_register_print_cb(my_print);
 #endif
 
-  // 全屏缓冲，放 PSRAM，避免双缓冲 partial 模式的脏区同步问题
+  // 全屏缓冲，FULL 模式避免 partial 脏区计算不准导致的乱码
+  // 466*466*2 ≈ 424KB，放 PSRAM 没问题
   const size_t buf_size = screenWidth * screenHeight * sizeof(lv_color_t);
   lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  lv_color_t *buf2 = NULL;
-  if(!buf1) {
-    Serial.println("Warning: PSRAM full-screen buffer alloc failed, falling back to partial");
+  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if(!buf1 || !buf2) {
+    Serial.println("Warning: PSRAM full-screen buffer alloc failed");
+    if(buf1) { free(buf1); buf1 = nullptr; }
+    if(buf2) { free(buf2); buf2 = nullptr; }
+    // 降级：单缓冲 partial，可能有乱码但至少能跑
     const size_t fallback_size = screenWidth * 40 * sizeof(lv_color_t);
     buf1 = (lv_color_t *)heap_caps_malloc(fallback_size, MALLOC_CAP_DMA);
   }
