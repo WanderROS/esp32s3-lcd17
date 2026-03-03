@@ -1,8 +1,10 @@
 <screen>
 	<view>
-		<lv_image src="weather_location_2_bg" align="center" x="0" y="0" />
 		<lv_label style_text_font="chinese_24" text="刘雪清牛掰" align="center" x="-9" y="-94" />
 		<lv_label text="English" style_text_font="english_24" align="center" y="-132" x="-5" />
 		<lv_label style_text_font="chinese_48" text="汉字" align="center" y="-45" width="96" height="65" x="-6" />
+		<button label="跳转" style_text_font="chinese_48" align="center" width="200" height="50">
+			<screen_load_event screen="elements" trigger="clicked" />
+		</button>
 	</view>
 </screen>

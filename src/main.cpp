@@ -268,7 +268,7 @@ void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
     data->state = LV_INDEV_STATE_PR;
     data->point.x = x[0];
     data->point.y = y[0];
-    Serial.printf("X:%d Y:%d\n", x[0], y[0]);
+    // Serial.printf("X:%d Y:%d\n", x[0], y[0]);
   }
   else
   {
@@ -478,12 +478,17 @@ void setup()
   lv_log_register_print_cb(my_print);
 #endif
 
-  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
-  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(screenWidth * screenHeight / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  // 双缓冲，40行高，支持异步刷新提升帧率
+  const size_t buf_size = screenWidth * 40 * sizeof(lv_color_t);
+  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
+  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
+  if(!buf2) {
+    Serial.println("Warning: single buffer mode (not enough DMA RAM for buf2)");
+  }
 
   disp = lv_display_create(screenWidth, screenHeight);
   lv_display_set_flush_cb(disp, my_disp_flush);
-  lv_display_set_buffers(disp, buf1, buf2, screenWidth * screenHeight / 4 * sizeof(lv_color_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
+  lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
   lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0); // LV_DISPLAY_ROTATION_180 LV_DISPLAY_ROTATION_0 work well
 
@@ -493,47 +498,17 @@ void setup()
 
   // 初始化SD卡（需要在LVGL文件系统使用前挂载）
   SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-  if (!SD_MMC.begin("/sdcard", true))
+  if (!SD_MMC.begin("/sdcard", true, false, BOARD_MAX_SDMMC_FREQ, 20))
   {
     Serial.println("SD Card init failed!");
   }
   else
   {
     Serial.println("SD Card mounted.");
-    // 验证文件是否存在
-    FILE *f = fopen("/sdcard/assets/icon_pause.png", "r");
-    if (f)
-    {
-      fseek(f, 0, SEEK_END);
-      long size = ftell(f);
-      fclose(f);
-      Serial.printf("icon_pause.png found, size: %ld bytes\n", size);
-    }
-    else
-    {
-      Serial.println("ERROR: assets/icon_pause.png NOT found on SD card!");
-    }
   }
 
-  // 从SD卡加载PNG图片并显示
-  // 图片路径格式: "A:路径/文件名.png"  (A驱动器对应 /sdcard 目录)
-  lv_obj_t *img = lv_image_create(lv_screen_active());
-  lv_image_set_src(img, "A:assets/icon_pause.png");
-  lv_obj_center(img);
-
-  // 调试：检查LVGL文件系统是否能打开文件
-  lv_fs_file_t lv_file;
-  lv_fs_res_t res = lv_fs_open(&lv_file, "A:assets/icon_pause.png", LV_FS_MODE_RD);
-  if (res == LV_FS_RES_OK)
-  {
-    Serial.println("LVGL FS: file opened OK");
-    lv_fs_close(&lv_file);
-  }
-  else
-  {
-    Serial.printf("LVGL FS: open FAILED, error code: %d\n", res);
-  }
-  lv_obj_center(img);
+  // 注意: 调试文件检查已移除，避免在字体加载前占用文件描述符
+  // 如需调试，可在 lvgl_sd_resource_init 之后添加
 
   const esp_timer_create_args_t lvgl_tick_timer_args = {
       .callback = &example_increase_lvgl_tick,
@@ -544,6 +519,10 @@ void setup()
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
   // lv_demo_widgets(); // 你也可以换成其他 demo
+  Serial.printf("Free heap: %u, Free DMA: %u, Free PSRAM: %u\n",
+    ESP.getFreeHeap(),
+    heap_caps_get_free_size(MALLOC_CAP_DMA),
+    heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   lvgl_sd_resource_init("A:assets/");
 
   /* 创建 XML 生成的主屏幕 */
@@ -556,7 +535,7 @@ void setup()
       {LV_SYMBOL_WIFI,      "WiFi",     on_menu_wifi,      NULL},
       {LV_SYMBOL_GPS,       "天气",     on_menu_weather,   NULL},
   };
-  menu_create(main_scr, menu_items, sizeof(menu_items) / sizeof(menu_items[0]), chinese_24);
+  // menu_create(main_scr, menu_items, sizeof(menu_items) / sizeof(menu_items[0]), chinese_24);
 
   lv_screen_load(main_scr);
 
@@ -691,62 +670,8 @@ void loop()
     power.clearIrqStatus();
   }
 
-  String info = "";
-
-  uint8_t charge_status = power.getChargerStatus();
-
-  info += "power Temperature: " + String(power.getTemperature()) + "*C\n";
-  info += "isCharging: " + String(power.isCharging() ? "YES" : "NO") + "\n";
-  info += "isDischarge: " + String(power.isDischarge() ? "YES" : "NO") + "\n";
-  info += "isStandby: " + String(power.isStandby() ? "YES" : "NO") + "\n";
-  info += "isVbusIn: " + String(power.isVbusIn() ? "YES" : "NO") + "\n";
-  info += "isVbusGood: " + String(power.isVbusGood() ? "YES" : "NO") + "\n";
-
-  switch (charge_status)
-  {
-  case XPOWERS_AXP2101_CHG_TRI_STATE:
-    info += "Charger Status: tri_charge\n";
-    break;
-  case XPOWERS_AXP2101_CHG_PRE_STATE:
-    info += "Charger Status: pre_charge\n";
-    break;
-  case XPOWERS_AXP2101_CHG_CC_STATE:
-    info += "Charger Status: constant charge\n";
-    break;
-  case XPOWERS_AXP2101_CHG_CV_STATE:
-    info += "Charger Status: constant voltage\n";
-    break;
-  case XPOWERS_AXP2101_CHG_DONE_STATE:
-    info += "Charger Status: charge done\n";
-    break;
-  case XPOWERS_AXP2101_CHG_STOP_STATE:
-    info += "Charger Status: not charging\n";
-    break;
-  }
-
-  info += "Battery Voltage: " + String(power.getBattVoltage()) + "mV\n";
-  info += "Vbus Voltage: " + String(power.getVbusVoltage()) + "mV\n";
-  info += "System Voltage: " + String(power.getSystemVoltage()) + "mV\n";
-
-  if (power.isBatteryConnect())
-  {
-    int percent = power.getBatteryPercent();
-    if (percent == 0)
-    {
-      int voltage = power.getBattVoltage();
-      if (voltage > 4100)
-        percent = 100;
-      else if (voltage > 3900)
-        percent = 75;
-      else if (voltage > 3700)
-        percent = 50;
-      else if (voltage > 3500)
-        percent = 25;
-      else
-        percent = 10;
-    }
-    info += "Battery Percent: " + String(percent) + "%\n";
-  }
+  // 电源状态信息（已注释，需要时取消注释）
+  // 注意：String拼接会消耗大量栈空间，避免在loop中频繁使用
   // Serial.println(info);
 }
 

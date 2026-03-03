@@ -1,7 +1,14 @@
 <project>
 	<targets>
-		<target name="target1">
+		<target name="esp32s3_1">
 			<display width="466" height="466" radius="233" />
+			<memory name="int_ram" size="128K" />
+			<memory name="ext_ram" size="8M" />
+			<memory name="int_flash" size="512K" />
+			<memory name="ext_flash" size="16M" />
+		</target>
+		<target name="esp32s3_2">
+			<display height="800" width="480" color_format="argb8888" />
 		</target>
 	</targets>
 </project>
