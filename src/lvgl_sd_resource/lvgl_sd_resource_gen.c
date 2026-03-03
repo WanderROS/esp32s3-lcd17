@@ -154,48 +154,48 @@ void lvgl_sd_resource_init_gen(const char * asset_path)
      * Fonts
      *----------------*/
 
-    /* create tiny ttf font "chinese_24" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/QingNiaoHuaGuangJianMeiHei-2.ttf");
-    chinese_24 = lv_tiny_ttf_create_file(buf, 24);
-    /* create tiny ttf font "chinese_48" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/QingNiaoHuaGuangJianMeiHei-2.ttf");
-    chinese_48 = lv_tiny_ttf_create_file(buf, 48);
-    /* create tiny ttf font "english_24" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/NotoSansTC-VariableFont_wght.ttf");
-    english_24 = lv_tiny_ttf_create_file(buf, 24);
-    /* create tiny ttf font "geist_semibold_12" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-SemiBold.ttf");
-    geist_semibold_12 = lv_tiny_ttf_create_file(buf, 12);
-    /* create tiny ttf font "geist_semibold_14" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-SemiBold.ttf");
-    geist_semibold_14 = lv_tiny_ttf_create_file(buf, 14);
-    /* create tiny ttf font "geist_bold_16" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-SemiBold.ttf");
-    geist_bold_16 = lv_tiny_ttf_create_file(buf, 16);
-    /* create tiny ttf font "geist_semibold_20" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-SemiBold.ttf");
-    geist_semibold_20 = lv_tiny_ttf_create_file(buf, 20);
-    /* create tiny ttf font "geist_semibold_28" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-SemiBold.ttf");
-    geist_semibold_28 = lv_tiny_ttf_create_file(buf, 28);
-    /* create tiny ttf font "geist_regular_12" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-Regular.ttf");
-    geist_regular_12 = lv_tiny_ttf_create_file(buf, 12);
-    /* create tiny ttf font "geist_regular_14" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-Regular.ttf");
-    geist_regular_14 = lv_tiny_ttf_create_file(buf, 14);
-    /* create tiny ttf font "geist_light_60" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Geist/Geist-Light.ttf");
-    geist_light_60 = lv_tiny_ttf_create_file(buf, 60);
-    /* create tiny ttf font "literata_80" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/Literata/Literata-Bold.ttf");
-    literata_80 = lv_tiny_ttf_create_file(buf, 80);
-    /* create tiny ttf font "abril_fatface_80" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/AbrilFatface/AbrilFatface-Regular.ttf");
-    abril_fatface_80 = lv_tiny_ttf_create_file(buf, 80);
-    /* create tiny ttf font "big_shoulders_80" from file */
-    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/BigShoulders/BigShoulders-Bold.ttf");
-    big_shoulders_80 = lv_tiny_ttf_create_file(buf, 80);
+    /* create bin font 'chinese_24' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/chinese_24");
+    chinese_24 = lv_binfont_create(buf);
+    /* create bin font 'chinese_48' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/chinese_48");
+    chinese_48 = lv_binfont_create(buf);
+    /* create bin font 'english_24' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/english_24");
+    english_24 = lv_binfont_create(buf);
+    /* create bin font 'geist_semibold_12' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_semibold_12");
+    geist_semibold_12 = lv_binfont_create(buf);
+    /* create bin font 'geist_semibold_14' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_semibold_14");
+    geist_semibold_14 = lv_binfont_create(buf);
+    /* create bin font 'geist_bold_16' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_bold_16");
+    geist_bold_16 = lv_binfont_create(buf);
+    /* create bin font 'geist_semibold_20' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_semibold_20");
+    geist_semibold_20 = lv_binfont_create(buf);
+    /* create bin font 'geist_semibold_28' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_semibold_28");
+    geist_semibold_28 = lv_binfont_create(buf);
+    /* create bin font 'geist_regular_12' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_regular_12");
+    geist_regular_12 = lv_binfont_create(buf);
+    /* create bin font 'geist_regular_14' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_regular_14");
+    geist_regular_14 = lv_binfont_create(buf);
+    /* create bin font 'geist_light_60' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/geist_light_60");
+    geist_light_60 = lv_binfont_create(buf);
+    /* create bin font 'literata_80' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/literata_80");
+    literata_80 = lv_binfont_create(buf);
+    /* create bin font 'abril_fatface_80' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/abril_fatface_80");
+    abril_fatface_80 = lv_binfont_create(buf);
+    /* create bin font 'big_shoulders_80' from file */
+    lv_snprintf(buf, 256, "%s%s", asset_path, "fonts/big_shoulders_80");
+    big_shoulders_80 = lv_binfont_create(buf);
 
 
     /*----------------

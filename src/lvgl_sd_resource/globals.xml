@@ -91,30 +91,132 @@
 	</images>
 
 	<fonts>
-		<tiny_ttf as_file="true" src_path="fonts/QingNiaoHuaGuangJianMeiHei-2.ttf" name="chinese_24" size="24" />
-		<tiny_ttf as_file="true" src_path="fonts/QingNiaoHuaGuangJianMeiHei-2.ttf" name="chinese_48" size="48" />
-		<tiny_ttf as_file="true" src_path="fonts/NotoSansTC-VariableFont_wght.ttf" name="english_24" size="24" />
+		<bin
+			bpp="4"
+			as_file="true"
+			src_path="fonts/QingNiaoHuaGuangJianMeiHei-2.ttf"
+			name="chinese_24"
+			size="24"
+			range="0x20-0x7E"
+			symbols="刘字掰汉清牛跳转雪"
+		/>
+		<bin
+			bpp="4"
+			as_file="true"
+			src_path="fonts/QingNiaoHuaGuangJianMeiHei-2.ttf"
+			name="chinese_48"
+			size="48"
+			range="0x20-0x7E"
+			symbols="刘字掰汉清牛跳转雪"
+		/>
+		<bin
+			bpp="4"
+			as_file="true"
+			src_path="fonts/NotoSansTC-VariableFont_wght.ttf"
+			name="english_24"
+			size="24"
+			range="0x20-0x7E"
+			symbols="刘字掰汉清牛跳转雪"
+		/>
 		<!-- Add <bin> , <tiny_ttf>, <freetype> tags here -->
-		<tiny_ttf name="geist_semibold_12" size="12" as_file="true" src_path="fonts/Geist/Geist-SemiBold.ttf" />
-		<tiny_ttf name="geist_semibold_14" size="14" as_file="true" src_path="fonts/Geist/Geist-SemiBold.ttf" />
-		<tiny_ttf name="geist_bold_16" size="16" as_file="true" src_path="fonts/Geist/Geist-SemiBold.ttf" />
-		<tiny_ttf name="geist_semibold_20" size="20" as_file="true" src_path="fonts/Geist/Geist-SemiBold.ttf" />
-		<tiny_ttf name="geist_semibold_28" size="28" as_file="true" src_path="fonts/Geist/Geist-SemiBold.ttf" />
-		<tiny_ttf name="geist_regular_12" size="12" as_file="true" src_path="fonts/Geist/Geist-Regular.ttf" />
-		<tiny_ttf name="geist_regular_14" size="14" as_file="true" src_path="fonts/Geist/Geist-Regular.ttf" />
-		<tiny_ttf name="geist_light_60" size="60" as_file="true" src_path="fonts/Geist/Geist-Light.ttf" />
-		<tiny_ttf name="literata_80" size="80" as_file="true" src_path="fonts/Literata/Literata-Bold.ttf" />
-		<tiny_ttf
+		<bin
+			bpp="4"
+			name="geist_semibold_12"
+			size="12"
+			as_file="true"
+			src_path="fonts/Geist/Geist-SemiBold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_semibold_14"
+			size="14"
+			as_file="true"
+			src_path="fonts/Geist/Geist-SemiBold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_bold_16"
+			size="16"
+			as_file="true"
+			src_path="fonts/Geist/Geist-SemiBold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_semibold_20"
+			size="20"
+			as_file="true"
+			src_path="fonts/Geist/Geist-SemiBold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_semibold_28"
+			size="28"
+			as_file="true"
+			src_path="fonts/Geist/Geist-SemiBold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_regular_12"
+			size="12"
+			as_file="true"
+			src_path="fonts/Geist/Geist-Regular.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_regular_14"
+			size="14"
+			as_file="true"
+			src_path="fonts/Geist/Geist-Regular.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="geist_light_60"
+			size="60"
+			as_file="true"
+			src_path="fonts/Geist/Geist-Light.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
+			bpp="4"
+			name="literata_80"
+			size="80"
+			as_file="true"
+			src_path="fonts/Literata/Literata-Bold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
+		/>
+		<bin
 			name="abril_fatface_80"
 			size="80"
 			as_file="true"
 			src_path="fonts/AbrilFatface/AbrilFatface-Regular.ttf"
+			range="0x20-0x7E"
+			bpp="4"
+			symbols="°"
 		/>
-		<tiny_ttf
+		<bin
+			bpp="4"
 			name="big_shoulders_80"
 			size="80"
 			as_file="true"
 			src_path="fonts/BigShoulders/BigShoulders-Bold.ttf"
+			range="0x20-0x7E"
+			symbols="°"
 		/>
 	</fonts>
 </globals>

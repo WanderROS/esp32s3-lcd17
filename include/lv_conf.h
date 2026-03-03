@@ -544,7 +544,7 @@
  *  If size is not set to 0, the decoder will fail to decode when the cache is full.
  *  If size is 0, the cache function is not enabled and the decoded memory will be
  *  released immediately after use. */
-#define LV_CACHE_DEF_SIZE       (192*1024)
+#define LV_CACHE_DEF_SIZE       (4*1024*1024)
 
 /** Default number of image header cache entries. The cache is used to store the headers of images
  *  The main logic is like `LV_CACHE_DEF_SIZE` but for image headers. */
@@ -1036,8 +1036,8 @@
 #if LV_USE_TINY_TTF
     /* Enable loading TTF data from files */
     #define LV_TINY_TTF_FILE_SUPPORT 1
-    #define LV_TINY_TTF_CACHE_GLYPH_CNT 128
-    #define LV_TINY_TTF_CACHE_KERNING_CNT 128
+    #define LV_TINY_TTF_CACHE_GLYPH_CNT 256
+    #define LV_TINY_TTF_CACHE_KERNING_CNT 256
 #endif
 
 /** Rlottie library */

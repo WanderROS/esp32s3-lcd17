@@ -26,10 +26,10 @@
 			<alarm />
 			<thermostat />
 			<move_goal />
-			<!-- <weather /> -->
-			<!-- <light_temperature /> -->
-			<!-- <music_player /> -->
-			<!-- <speaker_volume /> -->
+			<weather />
+			<light_temperature />
+			<music_player />
+			<speaker_volume />
 		</div>
 	</view>
 </screen>

@@ -478,17 +478,19 @@ void setup()
   lv_log_register_print_cb(my_print);
 #endif
 
-  // 双缓冲，40行高，支持异步刷新提升帧率
-  const size_t buf_size = screenWidth * 40 * sizeof(lv_color_t);
-  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
-  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
-  if(!buf2) {
-    Serial.println("Warning: single buffer mode (not enough DMA RAM for buf2)");
+  // 全屏缓冲，放 PSRAM，避免双缓冲 partial 模式的脏区同步问题
+  const size_t buf_size = screenWidth * screenHeight * sizeof(lv_color_t);
+  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  lv_color_t *buf2 = NULL;
+  if(!buf1) {
+    Serial.println("Warning: PSRAM full-screen buffer alloc failed, falling back to partial");
+    const size_t fallback_size = screenWidth * 40 * sizeof(lv_color_t);
+    buf1 = (lv_color_t *)heap_caps_malloc(fallback_size, MALLOC_CAP_DMA);
   }
 
   disp = lv_display_create(screenWidth, screenHeight);
   lv_display_set_flush_cb(disp, my_disp_flush);
-  lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_FULL);
 
   lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_0); // LV_DISPLAY_ROTATION_180 LV_DISPLAY_ROTATION_0 work well
 
