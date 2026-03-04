@@ -15,6 +15,13 @@
 #include "SensorQMI8658.hpp"
 #include "lvgl_sd_resource/lvgl_sd_resource.h"
 #include "menu/menu.h"
+#include <WiFi.h>
+#include "esp_sntp.h"
+
+// ---- WiFi 配置 ----
+#define WIFI_SSID     "xxx"
+#define WIFI_PASSWORD "xxx"
+// -------------------
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -367,14 +374,50 @@ void setup()
     }
   }
   Serial.println("Found PCF8563 RTC");
-  uint16_t year = 2026;
-  uint8_t month = 2;
-  uint8_t day = 6;
-  uint8_t hour = 19;
-  uint8_t minute = 53;
-  uint8_t second = 41;
 
-  rtc.setDateTime(year, month, day, hour, minute, second);
+  // 连接 WiFi 并通过阿里云 NTP 同步时间
+  Serial.printf("Connecting to WiFi: %s\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  uint32_t wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected, syncing NTP...");
+    // 配置阿里云 NTP，时区 UTC+8
+    configTzTime("CST-8", "ntp.aliyun.com", "ntp1.aliyun.com", "ntp2.aliyun.com");
+
+    // 等待 SNTP 同步完成，最多 10 秒
+    struct tm timeinfo = {};
+    uint32_t ntpStart = millis();
+    while (!getLocalTime(&timeinfo, 1000) && millis() - ntpStart < 10000) {
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (timeinfo.tm_year > 100) { // tm_year 从 1900 起，>100 说明已同步
+      // 写入 RTC（tm_year+1900, tm_mon+1）
+      rtc.setDateTime(
+        timeinfo.tm_year + 1900,
+        timeinfo.tm_mon + 1,
+        timeinfo.tm_mday,
+        timeinfo.tm_hour,
+        timeinfo.tm_min,
+        timeinfo.tm_sec
+      );
+      Serial.printf("RTC synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+        timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+      Serial.println("NTP sync failed, RTC keeps existing time.");
+    }
+    WiFi.disconnect(true);
+  } else {
+    Serial.println("WiFi connect failed, RTC keeps existing time.");
+  }
 
   if (!qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL))
   {
