@@ -17,11 +17,13 @@
 #include "menu/menu.h"
 #include <WiFi.h>
 #include "esp_sntp.h"
+#include "WiFiProv.h"
 
-// ---- WiFi 配置 ----
-#define WIFI_SSID     "xxx"
-#define WIFI_PASSWORD "xxx"
-// -------------------
+// ---- 蓝牙配网参数 ----
+const char *prov_pop          = "abcd1234";    // 配对PIN码，手机App中输入
+const char *prov_service_name = "PROV_CANON";  // 蓝牙设备名，App中可见
+const char *prov_service_key  = NULL;          // SoftAP密码，BLE模式下为NULL
+// ----------------------
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
 
@@ -332,6 +334,60 @@ static void on_menu_wifi(lv_event_t *e)
     // TODO: 在这里实现 WiFi 配置页面
 }
 
+// ---- NTP 同步（WiFi 连接成功后调用）----
+static void sync_ntp_and_rtc() {
+  configTzTime("CST-8", "ntp.aliyun.com", "ntp1.aliyun.com", "ntp2.aliyun.com");
+  struct tm timeinfo = {};
+  uint32_t ntpStart = millis();
+  while (!getLocalTime(&timeinfo, 1000) && millis() - ntpStart < 10000) {
+    Serial.print(".");
+  }
+  Serial.println();
+  if (timeinfo.tm_year > 100) {
+    rtc.setDateTime(
+      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec
+    );
+    Serial.printf("RTC synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  } else {
+    Serial.println("NTP sync failed, RTC keeps existing time.");
+  }
+}
+
+// ---- WiFiProv 事件回调（运行在独立 FreeRTOS 任务中）----
+void SysProvEvent(arduino_event_t *sys_event) {
+  switch (sys_event->event_id) {
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      Serial.print("\nWiFi connected, IP: ");
+      Serial.println(IPAddress(sys_event->event_info.got_ip.ip_info.ip.addr));
+      sync_ntp_and_rtc();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      Serial.println("\nWiFi disconnected.");
+      break;
+    case ARDUINO_EVENT_PROV_START:
+      Serial.println("\n配网已启动，请使用手机 App 输入 WiFi 信息");
+      break;
+    case ARDUINO_EVENT_PROV_CRED_RECV:
+      Serial.printf("\n收到 WiFi 凭据 SSID: %s\n",
+        (const char *)sys_event->event_info.prov_cred_recv.ssid);
+      break;
+    case ARDUINO_EVENT_PROV_CRED_FAIL:
+      Serial.println("\n配网失败，请重置后重试");
+      break;
+    case ARDUINO_EVENT_PROV_CRED_SUCCESS:
+      Serial.println("\n配网成功");
+      break;
+    case ARDUINO_EVENT_PROV_END:
+      Serial.println("\n配网流程结束");
+      break;
+    default:
+      break;
+  }
+}
+
 static void on_menu_weather(lv_event_t *e)
 {
     Serial.println("Menu: 天气");
@@ -375,49 +431,19 @@ void setup()
   }
   Serial.println("Found PCF8563 RTC");
 
-  // 连接 WiFi 并通过阿里云 NTP 同步时间
-  Serial.printf("Connecting to WiFi: %s\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  uint32_t wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi connected, syncing NTP...");
-    // 配置阿里云 NTP，时区 UTC+8
-    configTzTime("CST-8", "ntp.aliyun.com", "ntp1.aliyun.com", "ntp2.aliyun.com");
-
-    // 等待 SNTP 同步完成，最多 10 秒
-    struct tm timeinfo = {};
-    uint32_t ntpStart = millis();
-    while (!getLocalTime(&timeinfo, 1000) && millis() - ntpStart < 10000) {
-      Serial.print(".");
-    }
-    Serial.println();
-
-    if (timeinfo.tm_year > 100) { // tm_year 从 1900 起，>100 说明已同步
-      // 写入 RTC（tm_year+1900, tm_mon+1）
-      rtc.setDateTime(
-        timeinfo.tm_year + 1900,
-        timeinfo.tm_mon + 1,
-        timeinfo.tm_mday,
-        timeinfo.tm_hour,
-        timeinfo.tm_min,
-        timeinfo.tm_sec
-      );
-      Serial.printf("RTC synced: %04d-%02d-%02d %02d:%02d:%02d\n",
-        timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    } else {
-      Serial.println("NTP sync failed, RTC keeps existing time.");
-    }
-    WiFi.disconnect(true);
-  } else {
-    Serial.println("WiFi connect failed, RTC keeps existing time.");
-  }
+  // 通过蓝牙配网（ESP Provisioning App），已配过的设备直接从 NVS 读取凭据连接
+  WiFi.onEvent(SysProvEvent);
+  Serial.println("启动蓝牙配网，请打开 ESP BLE Prov App 扫描二维码或搜索设备");
+  uint8_t uuid[16] = {0xb4,0xdf,0x5a,0x1c,0x3f,0x6b,0xf4,0xbf,0xea,0x4a,0x82,0x03,0x04,0x90,0x1a,0x02};
+  WiFiProv.beginProvision(
+    NETWORK_PROV_SCHEME_BLE,
+    NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
+    NETWORK_PROV_SECURITY_1,
+    prov_pop, prov_service_name, prov_service_key,
+    uuid,
+    false  // false = 已配过则直接用 NVS 中的凭据，不重置
+  );
+  WiFiProv.printQR(prov_service_name, prov_pop, "ble");
 
   if (!qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL))
   {
@@ -683,8 +709,10 @@ void loop()
     }
     if (power.isPekeyLongPressIrq())
     {
-      Serial.println("Long Press Power Key\n\n\n");
-      // power.shutdown();
+      Serial.println("Long Press: 清除配网信息，重启后重新配网...");
+      WiFi.disconnect(true, true);  // true, true = disconnect + erase stored credentials
+      delay(500);
+      ESP.restart();
     }
     if (power.isBatInsertIrq())
     {
