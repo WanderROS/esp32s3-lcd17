@@ -531,29 +531,58 @@ void setup()
     heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   lvgl_sd_resource_init("A:assets/");
 
-  /* 创建 XML 生成的主屏幕 */
-  lv_obj_t *main_scr = main_page_create();
-
-  /* 在主屏幕上添加功能菜单列表 */
-  static const menu_item_t menu_items[] = {
-      {LV_SYMBOL_SETTINGS,  "设置",     on_menu_settings,  NULL},
-      {LV_SYMBOL_AUDIO,     "音乐播放", on_menu_music,     NULL},
-      {LV_SYMBOL_WIFI,      "WiFi",     on_menu_wifi,      NULL},
-      {LV_SYMBOL_GPS,       "天气",     on_menu_weather,   NULL},
-  };
+  /* 创建 XML 生成的主屏幕（暂时屏蔽）*/
+  // lv_obj_t *main_scr = main_page_create();
   // menu_create(main_scr, menu_items, sizeof(menu_items) / sizeof(menu_items[0]), chinese_24);
 
-  lv_screen_load(main_scr);
+  /* 时钟测试屏幕 */
+  lv_obj_t *clock_scr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(clock_scr, lv_color_black(), 0);
+
+  lv_obj_t *clock_label = lv_label_create(clock_scr);
+  lv_obj_set_style_text_color(clock_label, lv_color_white(), 0);
+  lv_obj_set_style_text_font(clock_label, geist_light_60, 0);
+  lv_obj_align(clock_label, LV_ALIGN_CENTER, 0, -20);
+  lv_label_set_text(clock_label, "00:00");
+  lv_obj_set_name(clock_label, "clock_label");
+
+  lv_obj_t *date_label = lv_label_create(clock_scr);
+  lv_obj_set_style_text_color(date_label, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(date_label, geist_semibold_20, 0);
+  lv_obj_align(date_label, LV_ALIGN_CENTER, 0, 40);
+  lv_label_set_text(date_label, "2026-03-04");
+  lv_obj_set_name(date_label, "date_label");
+
+  lv_screen_load(clock_scr);
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
 
   Serial.println("Setup complete.");
 }
 char displayBuf[64];
+static uint32_t last_clock_update = 0;
+
 void loop()
 {
   lv_timer_handler();
   delay(5);
+
+  // 每秒更新一次时钟
+  if (millis() - lastMillis >= 1000) {
+    lastMillis = millis();
+    auto dt = rtc.getDateTime();
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_t *cl = lv_obj_get_child_by_name(scr, "clock_label");
+    lv_obj_t *dl = lv_obj_get_child_by_name(scr, "date_label");
+    if (cl) {
+      snprintf(displayBuf, sizeof(displayBuf), "%02d:%02d:%02d", dt.getHour(), dt.getMinute(), dt.getSecond());
+      lv_label_set_text(cl, displayBuf);
+    }
+    if (dl) {
+      snprintf(displayBuf, sizeof(displayBuf), "%04d-%02d-%02d", dt.getYear(), dt.getMonth(), dt.getDay());
+      lv_label_set_text(dl, displayBuf);
+    }
+  }
 
   // if (qmi.getDataReady())
   // {
@@ -591,36 +620,6 @@ void loop()
   //     }
   //   }
   // }
-
-  if (millis() - lastMillis > 1000)
-  {
-    // Serial.println("accx:" + String(angleX) + " accy:" + String(angleY) + "\n");
-    lastMillis = millis();
-    RTC_DateTime datetime = rtc.getDateTime();
-    // Serial.printf(" Year :");
-    // Serial.print(datetime.getYear());
-    // Serial.printf(" Month:");
-    // Serial.print(datetime.getMonth());
-    // Serial.printf(" Day :");
-    // Serial.print(datetime.getDay());
-    // Serial.printf(" Hour:");
-    // Serial.print(datetime.getHour());
-    // Serial.printf(" Minute:");
-    // Serial.print(datetime.getMinute());
-    // Serial.printf(" Sec :");
-    // Serial.println(datetime.getSecond());
-
-    memset(displayBuf, 0, sizeof(displayBuf));
-    snprintf(displayBuf, sizeof(displayBuf), "%04d-%d-%d %d:%02d:%02d\0",
-             datetime.getYear(), datetime.getMonth(), datetime.getDay(),
-             datetime.getHour(), datetime.getMinute(), datetime.getSecond());
-
-    // Serial.println(displayBuf);
-
-    // Update label with current time
-    // lv_label_set_text(label, displayBuf);
-    // lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
-  }
 
   // 检测扩展IO的PMU中断引脚
   if (expander->digitalRead(PMU_IRQ_PIN) == LOW)
