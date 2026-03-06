@@ -54,32 +54,45 @@ static lv_draw_buf_t wifi_draw_buf;
 static uint8_t wifi_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 
 // ---- 图标栏：自动在圆形屏幕右上角从右往左排列 ----
-// 用法：创建好所有 canvas 后调用 iconbar_layout() 一次即可
-// 新增图标只需 iconbar_add()，不需要手动计算坐标
+// 图标栏：自动在圆形屏幕右上角从右往左排列
+// 新增图标只需 iconbar_add()，不可见图标调用 iconbar_set_visible() 后再 iconbar_layout() 重排
 #define ICONBAR_MAX 8
 static struct {
   lv_obj_t *obj[ICONBAR_MAX];
-  int        count;
-  int        icon_h;   // 所有图标统一高度
-  float      y_ratio;  // 图标底部距圆心的比例（0~1，越大越靠上）
-  int        margin;   // 距圆边缘安全距离
-  int        gap;      // 图标间距
+  bool      visible[ICONBAR_MAX];
+  int       count;
+  int       icon_h;   // 所有图标统一高度
+  float     y_ratio;  // 图标底部距圆心的比例（0~1，越大越靠上）
+  int       margin;   // 图标右边缘距圆边缘的安全距离（px）
+  int       gap;      // 图标之间的间距（px）
 } iconbar = {
   {},     // obj[]
+  {},     // visible[]
   0,      // count
-  36,     // icon_h:  图标高度（px），canvas 正方形所以也是宽度
-  0.70f,  // y_ratio: 图标底部距圆心的比例，0=圆心 0.5=半径一半处 1=顶端，越大越靠上
-  6,      // margin:  图标右边缘距圆边缘的安全距离（px）
-  6,      // gap:     图标之间的间距（px）
+  36,     // icon_h
+  0.70f,  // y_ratio
+  6,      // margin
+  6,      // gap
 };
 
-// 注册一个图标（按从右到左的顺序调用）
-static void iconbar_add(lv_obj_t *obj) {
-  if (iconbar.count < ICONBAR_MAX)
-    iconbar.obj[iconbar.count++] = obj;
+static void iconbar_add(lv_obj_t *obj, bool visible = true) {
+  if (iconbar.count < ICONBAR_MAX) {
+    iconbar.obj[iconbar.count]     = obj;
+    iconbar.visible[iconbar.count] = visible;
+    iconbar.count++;
+  }
 }
 
-// 计算并应用所有图标坐标，需在 screenWidth/screenHeight 已知后调用
+// 更新某个图标的可见性并重新排列（不可见的图标移出屏幕外）
+static void iconbar_set_visible(lv_obj_t *obj, bool visible) {
+  for (int i = 0; i < iconbar.count; i++) {
+    if (iconbar.obj[i] == obj) {
+      iconbar.visible[i] = visible;
+      break;
+    }
+  }
+}
+
 static void iconbar_layout(void) {
   int r   = screenWidth / 2;
   int cx  = screenWidth / 2;
@@ -88,20 +101,21 @@ static void iconbar_layout(void) {
   int icon_bottom_y = cy - (int)(r * iconbar.y_ratio);
   int icon_top_y    = icon_bottom_y - iconbar.icon_h;
 
-  // 在图标整个高度范围内，找最窄的那行（即最小的圆内 x 范围）
-  // 取 top 和 bottom 两行中距圆心更远的那行
   int dy_top    = cy - icon_top_y;
   int dy_bottom = cy - icon_bottom_y;
-  // 距圆心越远，该行圆内宽度越窄，取绝对值更大的
   int dy_worst  = (abs(dy_top) > abs(dy_bottom)) ? abs(dy_top) : abs(dy_bottom);
   int max_x     = cx + (int)sqrtf((float)(r*r - dy_worst*dy_worst)) - iconbar.margin;
 
-  // 从右往左依次放置
+  // 只排列可见图标，不可见的移到屏幕外
   int x = max_x;
   for (int i = 0; i < iconbar.count; i++) {
-    x -= iconbar.icon_h;  // canvas 是正方形，宽=高
-    lv_obj_set_pos(iconbar.obj[i], x, icon_top_y);
-    x -= iconbar.gap;
+    if (iconbar.visible[i]) {
+      x -= iconbar.icon_h;
+      lv_obj_set_pos(iconbar.obj[i], x, icon_top_y);
+      x -= iconbar.gap;
+    } else {
+      lv_obj_set_pos(iconbar.obj[i], -iconbar.icon_h, icon_top_y); // 移出屏幕
+    }
   }
 }
 
@@ -202,6 +216,42 @@ static lv_draw_buf_t  spk_draw_buf;
 static uint8_t        spk_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 static bool           pa_enabled = true;  // 功放初始开启
 static int            spk_volume = 0;     // 当前音量，与 audio.setVolume 同步
+
+// ---- 音乐播放图标 ----
+static lv_obj_t      *music_canvas = nullptr;
+static lv_draw_buf_t  music_draw_buf;
+static uint8_t        music_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
+
+// 双音符图标，播放时显示蓝色，停止时清空
+static void draw_music_icon(bool playing) {
+  if (!music_canvas) return;
+  lv_canvas_fill_bg(music_canvas, lv_color_black(), LV_OPA_TRANSP);
+  if (!playing) return;
+
+  lv_layer_t layer;
+  lv_canvas_init_layer(music_canvas, &layer);
+
+  lv_color_t c = lv_color_hex(0x00AAFF);
+  lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
+  ln.color = c; ln.opa = LV_OPA_COVER;
+
+  // 音符1：符干
+  ln.width=2; ln.p1.x=12; ln.p1.y=8; ln.p2.x=12; ln.p2.y=22; lv_draw_line(&layer,&ln);
+  // 音符1：符头
+  lv_draw_rect_dsc_t h; lv_draw_rect_dsc_init(&h);
+  h.bg_color=c; h.bg_opa=LV_OPA_COVER; h.radius=3; h.border_width=0;
+  lv_area_t a={7,20,14,25}; lv_draw_rect(&layer,&h,&a);
+
+  // 音符2：符干
+  ln.width=2; ln.p1.x=23; ln.p1.y=5; ln.p2.x=23; ln.p2.y=19; lv_draw_line(&layer,&ln);
+  // 音符2：符头
+  lv_area_t b={18,17,25,22}; lv_draw_rect(&layer,&h,&b);
+
+  // 连接横梁
+  ln.width=3; ln.p1.x=12; ln.p1.y=8; ln.p2.x=23; ln.p2.y=5; lv_draw_line(&layer,&ln);
+
+  lv_canvas_finish_layer(music_canvas, &layer);
+}
 
 static void draw_spk_icon(bool enabled, int volume = 6) {
   if (!spk_canvas) return;
@@ -912,16 +962,24 @@ void setup()
   spk_canvas = lv_canvas_create(clock_scr);
   lv_canvas_set_draw_buf(spk_canvas, &spk_draw_buf);
 
+  // ---- 音乐播放图标 canvas ----
+  lv_draw_buf_init(&music_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, music_canvas_buf, sizeof(music_canvas_buf));
+  music_canvas = lv_canvas_create(clock_scr);
+  lv_canvas_set_draw_buf(music_canvas, &music_draw_buf);
+
   // 图标栏：从右往左注册，iconbar_layout 自动计算坐标
-  // 新增图标只需在此追加 iconbar_add()，无需手动算坐标
-  iconbar_add(batt_canvas);  // 最右
-  iconbar_add(wifi_canvas);  // 次右
-  iconbar_add(spk_canvas);   // 再左
+  iconbar_add(batt_canvas);           // 最右
+  iconbar_add(wifi_canvas);
+  iconbar_add(music_canvas, false);   // 初始不可见，播放时自动出现
+  iconbar_add(spk_canvas);
+  
   iconbar_layout();
 
   draw_wifi_icon(0, false, true);
   draw_batt_icon(power.getBatteryPercent(), power.isCharging(), power.isVbusIn());
+  draw_music_icon(false);
   draw_spk_icon(pa_enabled, spk_volume);
+
 
   lv_screen_load(clock_scr);
 
@@ -1000,6 +1058,18 @@ void loop()
     if (spk_canvas) {
       draw_spk_icon(pa_enabled, spk_volume);
     }
+
+    // ---- 更新音乐播放图标 ----
+    if (music_canvas) {
+      bool playing = audio.isRunning();
+      static bool last_playing = false;
+      if (playing != last_playing) {
+        last_playing = playing;
+        iconbar_set_visible(music_canvas, playing);
+        iconbar_layout();
+      }
+      draw_music_icon(playing);
+    }
   }
 
   // if (qmi.getDataReady())
@@ -1051,14 +1121,8 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      // 音量循环：0 → 7 → 14 → 21 → 0
-      static const int vol_steps[] = {0, 7, 14, 21};
-      static int vol_step_idx = 2; // 初始 spk_volume=21，对应 idx=3，下一步从0开始
-      vol_step_idx = (vol_step_idx + 1) % 4;
-      spk_volume = vol_steps[vol_step_idx];
-      audio.setVolume(spk_volume);
-      draw_spk_icon(pa_enabled, spk_volume);
-      Serial.printf("Volume: %d\n", spk_volume);
+      audio.pauseResume();
+      Serial.printf("Audio %s\n", audio.isRunning() ? "resumed" : "paused");
     }
     if (power.isPekeyLongPressIrq())
     {
