@@ -32,28 +32,16 @@ void lv_mem_remove_pool(lv_mem_pool_t pool)
 
 void * lv_malloc_core(size_t size)
 {
-    /*
-     * 小于阈值的分配走内部RAM（widget/style/小缓冲区访问频繁，需要速度）
-     * 大于阈值的分配走PSRAM（图片缓存/字体数据/大缓冲区，节省内部RAM）
-     */
-    if(size < 512) {
-        void * p = malloc(size);  /* 内部RAM优先 */
-        if(p) return p;
-    }
-    /* 大块或内部RAM不足时走PSRAM */
+    /* 全部走 PSRAM，保留内部 RAM 给 BLE/WiFi 协议栈使用 */
     void * p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if(p == NULL) {
-        p = malloc(size);
+        p = malloc(size);  /* PSRAM 不足时降级到内部 RAM */
     }
     return p;
 }
 
 void * lv_realloc_core(void * p, size_t new_size)
 {
-    if(new_size < 512) {
-        void * new_p = realloc(p, new_size);
-        if(new_p) return new_p;
-    }
     void * new_p = heap_caps_realloc(p, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if(new_p == NULL) {
         new_p = realloc(p, new_size);

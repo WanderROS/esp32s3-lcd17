@@ -18,6 +18,7 @@
 #include <WiFi.h>
 #include "esp_sntp.h"
 #include "WiFiProv.h"
+#include "esp_heap_caps.h"
 
 // ---- 蓝牙配网参数 ----
 const char *prov_pop          = "abcd1234";    // 配对PIN码，手机App中输入
@@ -726,6 +727,20 @@ void setup()
   pinMode(PA, OUTPUT);
   digitalWrite(PA, HIGH);
 
+  // 蓝牙配网必须在其他外设初始化之前启动，确保内部 RAM 充足（BLE 需要 ~100KB）
+  WiFi.onEvent(SysProvEvent);
+  Serial.println("启动蓝牙配网，请打开 ESP BLE Prov App 扫描二维码或搜索设备");
+  uint8_t uuid[16] = {0xb4,0xdf,0x5a,0x1c,0x3f,0x6b,0xf4,0xbf,0xea,0x4a,0x82,0x03,0x04,0x90,0x1a,0x02};
+  WiFiProv.beginProvision(
+    NETWORK_PROV_SCHEME_BLE,
+    NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
+    NETWORK_PROV_SECURITY_1,
+    prov_pop, prov_service_name, prov_service_key,
+    uuid,
+    false  // false = 已配过则直接用 NVS 中的凭据，不重置
+  );
+  WiFiProv.printQR(prov_service_name, prov_pop, "ble");
+
   Wire.begin(IIC_SDA, IIC_SCL);
 
   // 初始化TCA9554扩展IO
@@ -755,20 +770,6 @@ void setup()
     }
   }
   Serial.println("Found PCF8563 RTC");
-
-  // 通过蓝牙配网（ESP Provisioning App），已配过的设备直接从 NVS 读取凭据连接
-  WiFi.onEvent(SysProvEvent);
-  Serial.println("启动蓝牙配网，请打开 ESP BLE Prov App 扫描二维码或搜索设备");
-  uint8_t uuid[16] = {0xb4,0xdf,0x5a,0x1c,0x3f,0x6b,0xf4,0xbf,0xea,0x4a,0x82,0x03,0x04,0x90,0x1a,0x02};
-  WiFiProv.beginProvision(
-    NETWORK_PROV_SCHEME_BLE,
-    NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
-    NETWORK_PROV_SECURITY_1,
-    prov_pop, prov_service_name, prov_service_key,
-    uuid,
-    false  // false = 已配过则直接用 NVS 中的凭据，不重置
-  );
-  WiFiProv.printQR(prov_service_name, prov_pop, "ble");
 
   if (!qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL))
   {
