@@ -385,7 +385,9 @@ void audio_task(void *param)
     while (file)
     {
       String fileName = String(file.name());
-      if (!file.isDirectory() && fileName.endsWith(".mp3"))
+      if (!file.isDirectory() &&
+          (fileName.endsWith(".mp3") || fileName.endsWith(".MP3") ||
+           fileName.endsWith(".wav") || fileName.endsWith(".WAV")))
       {
         mp3Files.push_back("/" + fileName);
         Serial.println("Found: " + fileName);
