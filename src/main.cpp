@@ -642,7 +642,7 @@ void setup()
   power.setChargingLedMode(XPOWERS_CHG_LED_ON);
 
   // 设置充电截止电压为 4.1V
-  power.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V1);
+  power.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V4);
 
   // 设置预充电电流 50mA
   power.setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_50MA);
