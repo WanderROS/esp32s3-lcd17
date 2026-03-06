@@ -53,6 +53,58 @@ static lv_obj_t *wifi_canvas = nullptr;
 static lv_draw_buf_t wifi_draw_buf;
 static uint8_t wifi_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 
+// ---- 图标栏：自动在圆形屏幕右上角从右往左排列 ----
+// 用法：创建好所有 canvas 后调用 iconbar_layout() 一次即可
+// 新增图标只需 iconbar_add()，不需要手动计算坐标
+#define ICONBAR_MAX 8
+static struct {
+  lv_obj_t *obj[ICONBAR_MAX];
+  int        count;
+  int        icon_h;   // 所有图标统一高度
+  float      y_ratio;  // 图标底部距圆心的比例（0~1，越大越靠上）
+  int        margin;   // 距圆边缘安全距离
+  int        gap;      // 图标间距
+} iconbar = {
+  {},     // obj[]
+  0,      // count
+  36,     // icon_h:  图标高度（px），canvas 正方形所以也是宽度
+  0.70f,  // y_ratio: 图标底部距圆心的比例，0=圆心 0.5=半径一半处 1=顶端，越大越靠上
+  6,      // margin:  图标右边缘距圆边缘的安全距离（px）
+  6,      // gap:     图标之间的间距（px）
+};
+
+// 注册一个图标（按从右到左的顺序调用）
+static void iconbar_add(lv_obj_t *obj) {
+  if (iconbar.count < ICONBAR_MAX)
+    iconbar.obj[iconbar.count++] = obj;
+}
+
+// 计算并应用所有图标坐标，需在 screenWidth/screenHeight 已知后调用
+static void iconbar_layout(void) {
+  int r   = screenWidth / 2;
+  int cx  = screenWidth / 2;
+  int cy  = screenHeight / 2;
+
+  int icon_bottom_y = cy - (int)(r * iconbar.y_ratio);
+  int icon_top_y    = icon_bottom_y - iconbar.icon_h;
+
+  // 在图标整个高度范围内，找最窄的那行（即最小的圆内 x 范围）
+  // 取 top 和 bottom 两行中距圆心更远的那行
+  int dy_top    = cy - icon_top_y;
+  int dy_bottom = cy - icon_bottom_y;
+  // 距圆心越远，该行圆内宽度越窄，取绝对值更大的
+  int dy_worst  = (abs(dy_top) > abs(dy_bottom)) ? abs(dy_top) : abs(dy_bottom);
+  int max_x     = cx + (int)sqrtf((float)(r*r - dy_worst*dy_worst)) - iconbar.margin;
+
+  // 从右往左依次放置
+  int x = max_x;
+  for (int i = 0; i < iconbar.count; i++) {
+    x -= iconbar.icon_h;  // canvas 是正方形，宽=高
+    lv_obj_set_pos(iconbar.obj[i], x, icon_top_y);
+    x -= iconbar.gap;
+  }
+}
+
 // ---- 电池图标 ----
 static lv_obj_t      *batt_canvas = nullptr;
 static lv_draw_buf_t  batt_draw_buf;
@@ -779,18 +831,23 @@ void setup()
   lv_label_set_text(date_label, "2026-03-04");
   lv_obj_set_name(date_label, "date_label");
 
-  // ---- WiFi 图标 canvas（圆屏右上安全区）----
+  // ---- WiFi 图标 canvas ----
   lv_draw_buf_init(&wifi_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, wifi_canvas_buf, sizeof(wifi_canvas_buf));
   wifi_canvas = lv_canvas_create(clock_scr);
   lv_canvas_set_draw_buf(wifi_canvas, &wifi_draw_buf);
-  lv_obj_align(wifi_canvas, LV_ALIGN_TOP_RIGHT, -144, 100);
-  draw_wifi_icon(0, false, true); // 初始：无网络（禁用态）
 
-  // ---- 电池图标 canvas（WiFi 图标左边）----
+  // ---- 电池图标 canvas ----
   lv_draw_buf_init(&batt_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, batt_canvas_buf, sizeof(batt_canvas_buf));
   batt_canvas = lv_canvas_create(clock_scr);
   lv_canvas_set_draw_buf(batt_canvas, &batt_draw_buf);
-  lv_obj_align(batt_canvas, LV_ALIGN_TOP_RIGHT, -100, 104);
+
+  // 图标栏：从右往左注册，iconbar_layout 自动计算坐标
+  // 新增图标只需在此追加 iconbar_add()，无需手动算坐标
+  iconbar_add(batt_canvas);  // 最右
+  iconbar_add(wifi_canvas);  // 次右
+  iconbar_layout();
+
+  draw_wifi_icon(0, false, true);
   draw_batt_icon(power.getBatteryPercent(), power.isCharging(), power.isVbusIn());
 
   lv_screen_load(clock_scr);
