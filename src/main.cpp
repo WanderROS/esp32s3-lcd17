@@ -201,43 +201,56 @@ static lv_obj_t      *spk_canvas = nullptr;
 static lv_draw_buf_t  spk_draw_buf;
 static uint8_t        spk_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 static bool           pa_enabled = true;  // 功放初始开启
+static int            spk_volume = 0;     // 当前音量，与 audio.setVolume 同步
 
-static void draw_spk_icon(bool enabled) {
+static void draw_spk_icon(bool enabled, int volume = 6) {
   if (!spk_canvas) return;
   lv_canvas_fill_bg(spk_canvas, lv_color_black(), LV_OPA_TRANSP);
 
   lv_layer_t layer;
   lv_canvas_init_layer(spk_canvas, &layer);
 
-  lv_color_t c = enabled ? lv_color_hex(0x00CC66) : lv_color_hex(0x444444);
+  lv_color_t c   = enabled ? lv_color_hex(0x00CC66) : lv_color_hex(0x444444);
+  lv_color_t dim = lv_color_hex(0x2A2A2A);
 
-  // 喇叭主体：梯形，左窄右宽
-  // 矩形部分 x=6~13, y=14~22
+  // 喇叭主体矩形
   lv_draw_rect_dsc_t body; lv_draw_rect_dsc_init(&body);
   body.bg_color = c; body.bg_opa = LV_OPA_COVER; body.radius = 1; body.border_width = 0;
   lv_area_t ba = {6, 14, 13, 22}; lv_draw_rect(&layer, &body, &ba);
 
-  // 喇叭锥形（三角）：用3条线围成
+  // 喇叭锥形三条线
   lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
   ln.color = c; ln.width = 2; ln.opa = LV_OPA_COVER;
-  // 上斜边
   ln.p1.x=13; ln.p1.y=14; ln.p2.x=21; ln.p2.y=7;  lv_draw_line(&layer,&ln);
-  // 下斜边
   ln.p1.x=13; ln.p1.y=22; ln.p2.x=21; ln.p2.y=29; lv_draw_line(&layer,&ln);
-  // 右边封口
   ln.p1.x=21; ln.p1.y=7;  ln.p2.x=21; ln.p2.y=29; lv_draw_line(&layer,&ln);
 
   if (enabled) {
-    // 声波弧线（两条）
-    lv_draw_arc_dsc_t arc; lv_draw_arc_dsc_init(&arc);
-    arc.color = c; arc.opa = LV_OPA_COVER; arc.rounded = 0;
-    arc.center.x = 13; arc.center.y = 18;
-    arc.width = 2; arc.radius = 10; arc.start_angle = 330; arc.end_angle = 30;
-    lv_draw_arc(&layer, &arc);
-    arc.width = 2; arc.radius = 15; arc.start_angle = 330; arc.end_angle = 30;
-    lv_draw_arc(&layer, &arc);
+    // 音量分4档：0~5=0档, 6~10=1档, 11~15=2档, 16~21=3档
+    // 声波弧线3条，按档位点亮
+    int vol_bars;
+    if      (volume <= 0)  vol_bars = 0;
+    else if (volume <= 7)  vol_bars = 1;
+    else if (volume <= 14) vol_bars = 2;
+    else                   vol_bars = 3;
+
+    // 3条弧，半径递增，圆心在喇叭口右侧
+    static const int arc_radii[3] = { 6, 11, 16 };
+    for (int i = 0; i < 3; i++) {
+      lv_draw_arc_dsc_t arc; lv_draw_arc_dsc_init(&arc);
+      arc.color       = (i < vol_bars) ? c : dim;
+      arc.opa         = LV_OPA_COVER;
+      arc.rounded     = 0;
+      arc.width       = 2;
+      arc.center.x    = 21;
+      arc.center.y    = 18;
+      arc.radius      = arc_radii[i];
+      arc.start_angle = 330;
+      arc.end_angle   = 30;
+      lv_draw_arc(&layer, &arc);
+    }
   } else {
-    // 静音：红色斜线
+    // 静音：红色 ✕
     lv_draw_line_dsc_t x; lv_draw_line_dsc_init(&x);
     x.color = lv_color_hex(0xCC2222); x.width = 2; x.opa = LV_OPA_COVER;
     x.p1.x=24; x.p1.y=10; x.p2.x=32; x.p2.y=26; lv_draw_line(&layer,&x);
@@ -374,7 +387,7 @@ void audio_task(void *param)
   delay(100);
 
   audio.setPinout(BCLKPIN, WSPIN, DIPIN, MCLKPIN);
-  audio.setVolume(6);
+  audio.setVolume(spk_volume);
 
   delay(100);
 
@@ -908,7 +921,7 @@ void setup()
 
   draw_wifi_icon(0, false, true);
   draw_batt_icon(power.getBatteryPercent(), power.isCharging(), power.isVbusIn());
-  draw_spk_icon(pa_enabled);
+  draw_spk_icon(pa_enabled, spk_volume);
 
   lv_screen_load(clock_scr);
 
@@ -982,6 +995,11 @@ void loop()
       int pct = power.isBatteryConnect() ? power.getBatteryPercent() : -1;
       draw_batt_icon(pct, power.isCharging(), power.isVbusIn());
     }
+
+    // ---- 更新扬声器图标 ----
+    if (spk_canvas) {
+      draw_spk_icon(pa_enabled, spk_volume);
+    }
   }
 
   // if (qmi.getDataReady())
@@ -1035,7 +1053,7 @@ void loop()
     {
       pa_enabled = !pa_enabled;
       digitalWrite(PA, pa_enabled ? HIGH : LOW);
-      draw_spk_icon(pa_enabled);
+      draw_spk_icon(pa_enabled, spk_volume);
       Serial.printf("PA %s\n", pa_enabled ? "ON" : "OFF");
     }
     if (power.isPekeyLongPressIrq())
