@@ -196,6 +196,57 @@ static void draw_batt_icon(int percent, bool charging, bool vbus) {
   lv_canvas_finish_layer(batt_canvas, &layer);
 }
 
+// ---- 铃声/功放图标 ----
+static lv_obj_t      *spk_canvas = nullptr;
+static lv_draw_buf_t  spk_draw_buf;
+static uint8_t        spk_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
+static bool           pa_enabled = true;  // 功放初始开启
+
+static void draw_spk_icon(bool enabled) {
+  if (!spk_canvas) return;
+  lv_canvas_fill_bg(spk_canvas, lv_color_black(), LV_OPA_TRANSP);
+
+  lv_layer_t layer;
+  lv_canvas_init_layer(spk_canvas, &layer);
+
+  lv_color_t c = enabled ? lv_color_hex(0x00CC66) : lv_color_hex(0x444444);
+
+  // 喇叭主体：梯形，左窄右宽
+  // 矩形部分 x=6~13, y=14~22
+  lv_draw_rect_dsc_t body; lv_draw_rect_dsc_init(&body);
+  body.bg_color = c; body.bg_opa = LV_OPA_COVER; body.radius = 1; body.border_width = 0;
+  lv_area_t ba = {6, 14, 13, 22}; lv_draw_rect(&layer, &body, &ba);
+
+  // 喇叭锥形（三角）：用3条线围成
+  lv_draw_line_dsc_t ln; lv_draw_line_dsc_init(&ln);
+  ln.color = c; ln.width = 2; ln.opa = LV_OPA_COVER;
+  // 上斜边
+  ln.p1.x=13; ln.p1.y=14; ln.p2.x=21; ln.p2.y=7;  lv_draw_line(&layer,&ln);
+  // 下斜边
+  ln.p1.x=13; ln.p1.y=22; ln.p2.x=21; ln.p2.y=29; lv_draw_line(&layer,&ln);
+  // 右边封口
+  ln.p1.x=21; ln.p1.y=7;  ln.p2.x=21; ln.p2.y=29; lv_draw_line(&layer,&ln);
+
+  if (enabled) {
+    // 声波弧线（两条）
+    lv_draw_arc_dsc_t arc; lv_draw_arc_dsc_init(&arc);
+    arc.color = c; arc.opa = LV_OPA_COVER; arc.rounded = 0;
+    arc.center.x = 13; arc.center.y = 18;
+    arc.width = 2; arc.radius = 10; arc.start_angle = 330; arc.end_angle = 30;
+    lv_draw_arc(&layer, &arc);
+    arc.width = 2; arc.radius = 15; arc.start_angle = 330; arc.end_angle = 30;
+    lv_draw_arc(&layer, &arc);
+  } else {
+    // 静音：红色斜线
+    lv_draw_line_dsc_t x; lv_draw_line_dsc_init(&x);
+    x.color = lv_color_hex(0xCC2222); x.width = 2; x.opa = LV_OPA_COVER;
+    x.p1.x=24; x.p1.y=10; x.p2.x=32; x.p2.y=26; lv_draw_line(&layer,&x);
+    x.p1.x=32; x.p1.y=10; x.p2.x=24; x.p2.y=26; lv_draw_line(&layer,&x);
+  }
+
+  lv_canvas_finish_layer(spk_canvas, &layer);
+}
+
 static void draw_wifi_icon(int rssi, bool connected, bool blink_on) {
   if (!wifi_canvas) return;
 
@@ -841,14 +892,21 @@ void setup()
   batt_canvas = lv_canvas_create(clock_scr);
   lv_canvas_set_draw_buf(batt_canvas, &batt_draw_buf);
 
+  // ---- 铃声图标 canvas ----
+  lv_draw_buf_init(&spk_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, spk_canvas_buf, sizeof(spk_canvas_buf));
+  spk_canvas = lv_canvas_create(clock_scr);
+  lv_canvas_set_draw_buf(spk_canvas, &spk_draw_buf);
+
   // 图标栏：从右往左注册，iconbar_layout 自动计算坐标
   // 新增图标只需在此追加 iconbar_add()，无需手动算坐标
   iconbar_add(batt_canvas);  // 最右
   iconbar_add(wifi_canvas);  // 次右
+  iconbar_add(spk_canvas);   // 再左
   iconbar_layout();
 
   draw_wifi_icon(0, false, true);
   draw_batt_icon(power.getBatteryPercent(), power.isCharging(), power.isVbusIn());
+  draw_spk_icon(pa_enabled);
 
   lv_screen_load(clock_scr);
 
@@ -973,10 +1031,10 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      current_rotation = (current_rotation + 1) % 4;
-      lv_display_rotation_t rotations[] = {LV_DISPLAY_ROTATION_0, LV_DISPLAY_ROTATION_90, LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270};
-      lv_display_set_rotation(disp, rotations[current_rotation]);
-      Serial.printf("Rotation: %d degrees\n", current_rotation * 90);
+      pa_enabled = !pa_enabled;
+      digitalWrite(PA, pa_enabled ? HIGH : LOW);
+      draw_spk_icon(pa_enabled);
+      Serial.printf("PA %s\n", pa_enabled ? "ON" : "OFF");
     }
     if (power.isPekeyLongPressIrq())
     {
