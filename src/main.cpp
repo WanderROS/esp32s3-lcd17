@@ -49,7 +49,66 @@ uint32_t lastMillis;
 // ---- WiFi 状态 ----
 enum WifiStatus { WIFI_STATUS_DISCONNECTED, WIFI_STATUS_CONNECTED, WIFI_STATUS_BLINK };
 static volatile WifiStatus wifi_status = WIFI_STATUS_DISCONNECTED;
-static lv_obj_t *wifi_icon = nullptr;
+static lv_obj_t *wifi_canvas = nullptr;
+static lv_draw_buf_t wifi_draw_buf;
+static uint8_t wifi_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
+
+static void draw_wifi_icon(int rssi, bool connected, bool blink_on) {
+  if (!wifi_canvas) return;
+
+  lv_canvas_fill_bg(wifi_canvas, lv_color_black(), LV_OPA_TRANSP);
+  if (!connected && !blink_on) return;
+
+  int bars;
+  lv_color_t on_color;
+  if (!connected) {
+    bars = 1;
+    on_color = lv_color_hex(0xFF6600);
+  } else {
+    on_color = lv_color_hex(0x00CC66);
+    if      (rssi >= -55) bars = 4;
+    else if (rssi >= -65) bars = 3;
+    else if (rssi >= -75) bars = 2;
+    else                  bars = 1;
+  }
+
+  const lv_color_t dim = lv_color_hex(0x383838);
+
+  // 所有弧共享同一圆心和角度，只有半径不同
+  // 圆心在底部中央，角度 225°~315°
+  const int32_t cx = 18, cy = 30;
+  const int16_t A1 = 225, A2 = 315;
+  const int32_t radii[4] = { 6, 11, 16, 21 };
+
+  lv_layer_t layer;
+  lv_canvas_init_layer(wifi_canvas, &layer);
+
+  for (int i = 0; i < 4; i++) {
+    lv_draw_arc_dsc_t dsc;
+    lv_draw_arc_dsc_init(&dsc);
+    dsc.center.x    = cx;
+    dsc.center.y    = cy;
+    dsc.radius      = radii[i];
+    dsc.start_angle = A1;
+    dsc.end_angle   = A2;
+    dsc.width       = 3;
+    dsc.rounded     = 0;
+    dsc.color       = (i < bars) ? on_color : dim;
+    dsc.opa         = LV_OPA_COVER;
+    lv_draw_arc(&layer, &dsc);
+  }
+
+  // 中心点
+  lv_draw_rect_dsc_t dot;
+  lv_draw_rect_dsc_init(&dot);
+  dot.bg_color = on_color;
+  dot.bg_opa   = LV_OPA_COVER;
+  dot.radius   = LV_RADIUS_CIRCLE;
+  lv_area_t dot_area = { cx - 2, cy - 2, cx + 2, cy + 2 };
+  lv_draw_rect(&layer, &dot, &dot_area);
+
+  lv_canvas_finish_layer(wifi_canvas, &layer);
+}
 
 SensorQMI8658 qmi;
 
@@ -629,12 +688,12 @@ void setup()
   lv_label_set_text(date_label, "2026-03-04");
   lv_obj_set_name(date_label, "date_label");
 
-  // ---- WiFi 图标（右上角，圆屏内安全区域）----
-  wifi_icon = lv_label_create(clock_scr);
-  lv_obj_set_style_text_font(wifi_icon, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x888888), 0);
-  lv_obj_align(wifi_icon, LV_ALIGN_TOP_RIGHT, -100, 100);
-  lv_label_set_text(wifi_icon, LV_SYMBOL_CLOSE);  // 初始：无网络
+  // ---- WiFi 图标 canvas（圆屏右上安全区）----
+  lv_draw_buf_init(&wifi_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, wifi_canvas_buf, sizeof(wifi_canvas_buf));
+  wifi_canvas = lv_canvas_create(clock_scr);
+  lv_canvas_set_draw_buf(wifi_canvas, &wifi_draw_buf);
+  lv_obj_align(wifi_canvas, LV_ALIGN_TOP_RIGHT, -100, 100);
+  draw_wifi_icon(0, false, true); // 初始：无网络（禁用态）
 
   lv_screen_load(clock_scr);
 
@@ -667,28 +726,38 @@ void loop()
     }
 
     // ---- 更新 WiFi 图标 ----
-    if (wifi_icon) {
+    if (wifi_canvas) {
+      int rssi = (wifi_status == WIFI_STATUS_CONNECTED) ? WiFi.RSSI() : -100;
       switch (wifi_status) {
         case WIFI_STATUS_CONNECTED:
-          lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x00CC66), 0);
-          lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
-          lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          draw_wifi_icon(rssi, true, true);
           break;
         case WIFI_STATUS_BLINK:
-          // 奇偶秒切换显示/隐藏
-          if (dt.getSecond() % 2 == 0) {
-            lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0xFF6600), 0);
-            lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
-            lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
-          } else {
-            lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
-          }
+          draw_wifi_icon(rssi, false, dt.getSecond() % 2 == 0);
           break;
         case WIFI_STATUS_DISCONNECTED:
         default:
-          lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x666666), 0);
-          lv_label_set_text(wifi_icon, LV_SYMBOL_CLOSE);
-          lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          // 禁用态：暗色图标 + 红色斜线，圆心和角度与 draw_wifi_icon 完全一致
+          lv_canvas_fill_bg(wifi_canvas, lv_color_black(), LV_OPA_TRANSP);
+          {
+            const lv_color_t dim = lv_color_hex(0x383838);
+            const int32_t cx = 18, cy = 30;
+            const int32_t radii[4] = { 6, 11, 16, 21 };
+            lv_layer_t layer;
+            lv_canvas_init_layer(wifi_canvas, &layer);
+            for (int i = 0; i < 4; i++) {
+              lv_draw_arc_dsc_t dsc; lv_draw_arc_dsc_init(&dsc);
+              dsc.center.x=cx; dsc.center.y=cy;
+              dsc.radius=radii[i]; dsc.start_angle=225; dsc.end_angle=315;
+              dsc.width=3; dsc.rounded=0; dsc.color=dim; dsc.opa=LV_OPA_COVER;
+              lv_draw_arc(&layer, &dsc);
+            }
+            lv_draw_line_dsc_t line; lv_draw_line_dsc_init(&line);
+            line.color=lv_color_hex(0xCC2222); line.width=2; line.opa=LV_OPA_COVER;
+            line.p1.x=4; line.p1.y=4; line.p2.x=32; line.p2.y=32;
+            lv_draw_line(&layer, &line);
+            lv_canvas_finish_layer(wifi_canvas, &layer);
+          }
           break;
       }
     }
