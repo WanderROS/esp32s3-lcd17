@@ -216,7 +216,7 @@ static lv_obj_t      *spk_canvas = nullptr;
 static lv_draw_buf_t  spk_draw_buf;
 static uint8_t        spk_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 static bool           pa_enabled = true;  // 功放初始开启
-static int            spk_volume = 0;     // 当前音量，与 audio.setVolume 同步
+static int            spk_volume = 1;     // 当前音量，与 audio.setVolume 同步
 
 // ---- 音乐播放图标 ----
 static lv_obj_t      *music_canvas = nullptr;
@@ -1128,9 +1128,10 @@ void loop()
     if (power.isPekeyLongPressIrq())
     {
       Serial.println("Long Press: 清除配网信息，重启后重新配网...");
-      WiFi.disconnect(true, true);  // true, true = disconnect + erase stored credentials
-      delay(500);
-      ESP.restart();
+      // WiFi.disconnect(true, true);  // true, true = disconnect + erase stored credentials
+      // delay(500);
+      // ESP.restart();
+
     }
     if (power.isBatInsertIrq())
     {
