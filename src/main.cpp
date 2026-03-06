@@ -1051,10 +1051,14 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      pa_enabled = !pa_enabled;
-      digitalWrite(PA, pa_enabled ? HIGH : LOW);
+      // 音量循环：0 → 7 → 14 → 21 → 0
+      static const int vol_steps[] = {0, 7, 14, 21};
+      static int vol_step_idx = 2; // 初始 spk_volume=21，对应 idx=3，下一步从0开始
+      vol_step_idx = (vol_step_idx + 1) % 4;
+      spk_volume = vol_steps[vol_step_idx];
+      audio.setVolume(spk_volume);
       draw_spk_icon(pa_enabled, spk_volume);
-      Serial.printf("PA %s\n", pa_enabled ? "ON" : "OFF");
+      Serial.printf("Volume: %d\n", spk_volume);
     }
     if (power.isPekeyLongPressIrq())
     {
