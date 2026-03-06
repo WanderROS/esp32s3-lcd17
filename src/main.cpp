@@ -46,6 +46,11 @@ lv_display_t *disp; // Global display object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
 
+// ---- WiFi 状态 ----
+enum WifiStatus { WIFI_STATUS_DISCONNECTED, WIFI_STATUS_CONNECTED, WIFI_STATUS_BLINK };
+static volatile WifiStatus wifi_status = WIFI_STATUS_DISCONNECTED;
+static lv_obj_t *wifi_icon = nullptr;
+
 SensorQMI8658 qmi;
 
 IMUdata acc;
@@ -362,10 +367,12 @@ void SysProvEvent(arduino_event_t *sys_event) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.print("\nWiFi connected, IP: ");
       Serial.println(IPAddress(sys_event->event_info.got_ip.ip_info.ip.addr));
+      wifi_status = WIFI_STATUS_CONNECTED;
       sync_ntp_and_rtc();
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("\nWiFi disconnected.");
+      wifi_status = WIFI_STATUS_BLINK;
       break;
     case ARDUINO_EVENT_PROV_START:
       Serial.println("\n配网已启动，请使用手机 App 输入 WiFi 信息");
@@ -622,6 +629,13 @@ void setup()
   lv_label_set_text(date_label, "2026-03-04");
   lv_obj_set_name(date_label, "date_label");
 
+  // ---- WiFi 图标（右上角，圆屏内安全区域）----
+  wifi_icon = lv_label_create(clock_scr);
+  lv_obj_set_style_text_font(wifi_icon, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x888888), 0);
+  lv_obj_align(wifi_icon, LV_ALIGN_TOP_RIGHT, -100, 100);
+  lv_label_set_text(wifi_icon, LV_SYMBOL_CLOSE);  // 初始：无网络
+
   lv_screen_load(clock_scr);
 
   xTaskCreatePinnedToCore(audio_task, "audio_task", 8192, NULL, 1, NULL, 1);
@@ -650,6 +664,33 @@ void loop()
     if (dl) {
       snprintf(displayBuf, sizeof(displayBuf), "%04d-%02d-%02d", dt.getYear(), dt.getMonth(), dt.getDay());
       lv_label_set_text(dl, displayBuf);
+    }
+
+    // ---- 更新 WiFi 图标 ----
+    if (wifi_icon) {
+      switch (wifi_status) {
+        case WIFI_STATUS_CONNECTED:
+          lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x00CC66), 0);
+          lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
+          lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          break;
+        case WIFI_STATUS_BLINK:
+          // 奇偶秒切换显示/隐藏
+          if (dt.getSecond() % 2 == 0) {
+            lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0xFF6600), 0);
+            lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
+            lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          }
+          break;
+        case WIFI_STATUS_DISCONNECTED:
+        default:
+          lv_obj_set_style_text_color(wifi_icon, lv_color_hex(0x666666), 0);
+          lv_label_set_text(wifi_icon, LV_SYMBOL_CLOSE);
+          lv_obj_clear_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+          break;
+      }
     }
   }
 
