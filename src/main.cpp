@@ -53,6 +53,97 @@ static lv_obj_t *wifi_canvas = nullptr;
 static lv_draw_buf_t wifi_draw_buf;
 static uint8_t wifi_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
 
+// ---- 电池图标 ----
+static lv_obj_t      *batt_canvas = nullptr;
+static lv_draw_buf_t  batt_draw_buf;
+static uint8_t        batt_canvas_buf[LV_CANVAS_BUF_SIZE(36, 36, 32, 4)];
+
+// percent: 0~100, -1=无电池; charging: 充电中; vbus: 已接电源
+// 横向电池：主体在左，正极头在右
+static void draw_batt_icon(int percent, bool charging, bool vbus) {
+  if (!batt_canvas) return;
+  lv_canvas_fill_bg(batt_canvas, lv_color_black(), LV_OPA_TRANSP);
+
+  lv_layer_t layer;
+  lv_canvas_init_layer(batt_canvas, &layer);
+
+  // 横向布局，垂直居中
+  // 主体外框: x=1~29, y=7~28  (宽29, 高22)
+  // 正极头:   x=30~34, y=12~23 (宽5, 高12)
+  const int bx = 1,  by = 7, bw = 29, bh = 22;
+  const int tx = 30, ty = 12, tw = 5,  th = 12;
+
+  lv_color_t frame_color;
+  if (percent < 0)        frame_color = lv_color_hex(0x555555);
+  else if (percent <= 15) frame_color = lv_color_hex(0xCC2222);
+  else if (charging)      frame_color = lv_color_hex(0x00AAFF);
+  else                    frame_color = lv_color_hex(0xAAAAAA);
+
+  // 正极头（实心小块）
+  lv_draw_rect_dsc_t cap; lv_draw_rect_dsc_init(&cap);
+  cap.bg_color = frame_color; cap.bg_opa = LV_OPA_COVER;
+  cap.radius = 1; cap.border_width = 0;
+  lv_area_t cap_area = { tx, ty, tx+tw-1, ty+th-1 };
+  lv_draw_rect(&layer, &cap, &cap_area);
+
+  // 主体外框（空心）
+  lv_draw_rect_dsc_t frame; lv_draw_rect_dsc_init(&frame);
+  frame.bg_opa = LV_OPA_TRANSP;
+  frame.border_color = frame_color; frame.border_width = 2;
+  frame.border_opa = LV_OPA_COVER; frame.radius = 2;
+  lv_area_t frame_area = { bx, by, bx+bw-1, by+bh-1 };
+  lv_draw_rect(&layer, &frame, &frame_area);
+
+  if (percent >= 0) {
+    // 电量填充（从左往右）
+    const int inner_y  = by + 3;
+    const int inner_h  = bh - 6;
+    const int inner_x  = bx + 3;
+    const int inner_max_w = bw - 6;
+    int fill_w = (inner_max_w * percent) / 100;
+    if (fill_w < 1 && percent > 0) fill_w = 1;
+
+    lv_color_t fill_color;
+    if      (percent <= 15) fill_color = lv_color_hex(0xCC2222);
+    else if (percent <= 40) fill_color = lv_color_hex(0xFF8800);
+    else if (charging)      fill_color = lv_color_hex(0x00AAFF);
+    else                    fill_color = lv_color_hex(0x00CC66);
+
+    if (fill_w > 0) {
+      lv_draw_rect_dsc_t fill; lv_draw_rect_dsc_init(&fill);
+      fill.bg_color = fill_color; fill.bg_opa = LV_OPA_COVER;
+      fill.radius = 1; fill.border_width = 0;
+      lv_area_t fill_area = { inner_x, inner_y, inner_x + fill_w - 1, inner_y + inner_h - 1 };
+      lv_draw_rect(&layer, &fill, &fill_area);
+    }
+
+    // 充电闪电：像素级 ⚡，横向电池中央
+    // 形状：上横 → 左斜下 → 中横 → 左斜下 → 下横
+    if (charging) {
+      // 闪电中心
+      int lx = bx + bw/2 - 1;
+      int ly = by + bh/2;
+      lv_draw_line_dsc_t b; lv_draw_line_dsc_init(&b);
+      b.color = lv_color_white(); b.width = 2; b.opa = LV_OPA_COVER;
+      // 上半：右上 → 左下（斜）
+      b.p1.x=lx+4; b.p1.y=ly-4; b.p2.x=lx;   b.p2.y=ly;   lv_draw_line(&layer,&b);
+      // 中横：向右突出
+      b.p1.x=lx;   b.p1.y=ly;   b.p2.x=lx+3; b.p2.y=ly;   lv_draw_line(&layer,&b);
+      // 下半：右 → 左下（斜）
+      b.p1.x=lx+3; b.p1.y=ly;   b.p2.x=lx-1; b.p2.y=ly+4; lv_draw_line(&layer,&b);
+    }
+  } else {
+    // 无电池：框内画横线表示缺失
+    lv_draw_line_dsc_t q; lv_draw_line_dsc_init(&q);
+    q.color = lv_color_hex(0x555555); q.width = 2; q.opa = LV_OPA_COVER;
+    int mx = bx + bw/2, my = by + bh/2;
+    q.p1.x=mx-5; q.p1.y=my; q.p2.x=mx+5; q.p2.y=my; lv_draw_line(&layer,&q);
+    q.p1.x=mx;   q.p1.y=my-4; q.p2.x=mx; q.p2.y=my+4; lv_draw_line(&layer,&q);
+  }
+
+  lv_canvas_finish_layer(batt_canvas, &layer);
+}
+
 static void draw_wifi_icon(int rssi, bool connected, bool blink_on) {
   if (!wifi_canvas) return;
 
@@ -692,8 +783,15 @@ void setup()
   lv_draw_buf_init(&wifi_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, wifi_canvas_buf, sizeof(wifi_canvas_buf));
   wifi_canvas = lv_canvas_create(clock_scr);
   lv_canvas_set_draw_buf(wifi_canvas, &wifi_draw_buf);
-  lv_obj_align(wifi_canvas, LV_ALIGN_TOP_RIGHT, -100, 100);
+  lv_obj_align(wifi_canvas, LV_ALIGN_TOP_RIGHT, -144, 100);
   draw_wifi_icon(0, false, true); // 初始：无网络（禁用态）
+
+  // ---- 电池图标 canvas（WiFi 图标左边）----
+  lv_draw_buf_init(&batt_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, batt_canvas_buf, sizeof(batt_canvas_buf));
+  batt_canvas = lv_canvas_create(clock_scr);
+  lv_canvas_set_draw_buf(batt_canvas, &batt_draw_buf);
+  lv_obj_align(batt_canvas, LV_ALIGN_TOP_RIGHT, -100, 104);
+  draw_batt_icon(power.getBatteryPercent(), power.isCharging(), power.isVbusIn());
 
   lv_screen_load(clock_scr);
 
@@ -760,6 +858,12 @@ void loop()
           }
           break;
       }
+    }
+
+    // ---- 更新电池图标 ----
+    if (batt_canvas) {
+      int pct = power.isBatteryConnect() ? power.getBatteryPercent() : -1;
+      draw_batt_icon(pct, power.isCharging(), power.isVbusIn());
     }
   }
 
