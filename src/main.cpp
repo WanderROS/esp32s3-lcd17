@@ -614,6 +614,11 @@ XPowersPMU power;
 bool pmu_flag = false;
 bool adc_switch = false;
 
+// ---- 屏幕亮度档位 ----
+static const uint8_t brightness_levels[] = {50, 100, 150, 200, 255};
+static const int brightness_level_count = sizeof(brightness_levels) / sizeof(brightness_levels[0]);
+static int brightness_index = 3; // 默认第4档 (200)
+
 void IRAM_ATTR pmuIrqHandler()
 {
   pmu_flag = true;
@@ -948,6 +953,45 @@ void setup()
   lv_label_set_text(date_label, "2026-03-04");
   lv_obj_set_name(date_label, "date_label");
 
+  // ---- 亮度滑块 ----
+  lv_obj_t *bri_slider = lv_slider_create(clock_scr);
+  lv_obj_set_size(bri_slider, 200, 8);
+  lv_obj_align(bri_slider, LV_ALIGN_CENTER, 0, 100);
+  lv_slider_set_range(bri_slider, 10, 255);
+  lv_slider_set_value(bri_slider, brightness_levels[brightness_index], LV_ANIM_OFF);
+  // 轨道颜色
+  lv_obj_set_style_bg_color(bri_slider, lv_color_hex(0x444444), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(bri_slider, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_radius(bri_slider, 4, LV_PART_MAIN);
+  // 已填充部分颜色
+  lv_obj_set_style_bg_color(bri_slider, lv_color_hex(0xFFDD55), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(bri_slider, LV_OPA_COVER, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(bri_slider, 4, LV_PART_INDICATOR);
+  // 滑块把手
+  lv_obj_set_style_bg_color(bri_slider, lv_color_white(), LV_PART_KNOB);
+  lv_obj_set_style_bg_opa(bri_slider, LV_OPA_COVER, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(bri_slider, 4, LV_PART_KNOB);
+  lv_obj_set_style_radius(bri_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+  lv_obj_set_name(bri_slider, "bri_slider");
+  lv_obj_add_event_cb(bri_slider, [](lv_event_t *e) {
+    lv_obj_t *s = (lv_obj_t *)lv_event_get_target(e);
+    int32_t val = lv_slider_get_value(s);
+    gfx->setBrightness((uint8_t)val);
+    // 同步 brightness_index 到最近档位
+    int best = 0;
+    for (int i = 1; i < brightness_level_count; i++) {
+      if (abs(brightness_levels[i] - val) < abs(brightness_levels[best] - val)) best = i;
+    }
+    brightness_index = best;
+  }, LV_EVENT_VALUE_CHANGED, NULL);
+
+  // 太阳图标标签
+  lv_obj_t *bri_icon = lv_label_create(clock_scr);
+  lv_obj_set_style_text_color(bri_icon, lv_color_hex(0xFFDD55), 0);
+  // 不设置自定义字体，使用 LVGL 默认字体以正确渲染内置 symbol
+  lv_label_set_text(bri_icon, LV_SYMBOL_EYE_OPEN);
+  lv_obj_align_to(bri_icon, bri_slider, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+
   // ---- WiFi 图标 canvas ----
   lv_draw_buf_init(&wifi_draw_buf, 36, 36, LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO, wifi_canvas_buf, sizeof(wifi_canvas_buf));
   wifi_canvas = lv_canvas_create(clock_scr);
@@ -1122,8 +1166,15 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      audio.pauseResume();
-      Serial.printf("Audio %s\n", audio.isRunning() ? "resumed" : "paused");
+      // 短按：循环切换屏幕亮度档位
+      brightness_index = (brightness_index + 1) % brightness_level_count;
+      uint8_t bri = brightness_levels[brightness_index];
+      gfx->setBrightness(bri);
+      Serial.printf("Brightness: %d (level %d/%d)\n", bri, brightness_index + 1, brightness_level_count);
+      // 同步更新 LVGL 滑块
+      lv_obj_t *scr = lv_screen_active();
+      lv_obj_t *sl = lv_obj_get_child_by_name(scr, "bri_slider");
+      if (sl) lv_slider_set_value(sl, bri, LV_ANIM_ON);
     }
     if (power.isPekeyLongPressIrq())
     {
