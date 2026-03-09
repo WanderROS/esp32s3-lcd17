@@ -46,6 +46,7 @@ lv_obj_t *label;    // Global label object
 lv_display_t *disp; // Global display object
 SensorPCF85063 rtc;
 uint32_t lastMillis;
+static lv_obj_t *clock_scr_global = nullptr; // 时钟页面全局引用
 
 // ---- WiFi 状态 ----
 enum WifiStatus { WIFI_STATUS_DISCONNECTED, WIFI_STATUS_CONNECTED, WIFI_STATUS_BLINK };
@@ -419,6 +420,62 @@ void second_button_ck(lv_event_t *e)
 std::vector<String> mp3Files;
 int currentMp3Index = 0;
 
+// ---- 音乐播放页面 ----
+static lv_obj_t *music_scr = nullptr;
+static lv_obj_t *music_title_label = nullptr;
+static lv_obj_t *music_progress_bar = nullptr;
+static lv_obj_t *music_time_label = nullptr;
+static char current_song_title[128] = "Unknown";
+
+static void music_screen_create() {
+  music_scr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(music_scr, lv_color_black(), 0);
+
+  // 音符图标
+  lv_obj_t *note_icon = lv_label_create(music_scr);
+  lv_obj_set_style_text_color(note_icon, lv_color_hex(0x00AAFF), 0);
+  lv_obj_set_style_text_font(note_icon, &lv_font_montserrat_40, 0);
+  lv_label_set_text(note_icon, LV_SYMBOL_AUDIO);
+  lv_obj_align(note_icon, LV_ALIGN_CENTER, 0, -90);
+
+  // 歌曲名称
+  music_title_label = lv_label_create(music_scr);
+  lv_obj_set_style_text_color(music_title_label, lv_color_white(), 0);
+  lv_obj_set_style_text_font(music_title_label, geist_semibold_20, 0);
+  lv_label_set_long_mode(music_title_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_width(music_title_label, 300);
+  lv_obj_align(music_title_label, LV_ALIGN_CENTER, 0, -20);
+  lv_label_set_text(music_title_label, current_song_title);
+  lv_obj_set_name(music_title_label, "music_title");
+
+  // 进度条
+  music_progress_bar = lv_bar_create(music_scr);
+  lv_obj_set_size(music_progress_bar, 300, 8);
+  lv_obj_align(music_progress_bar, LV_ALIGN_CENTER, 0, 30);
+  lv_bar_set_range(music_progress_bar, 0, 100);
+  lv_bar_set_value(music_progress_bar, 0, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x00AAFF), LV_PART_INDICATOR);
+  lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_MAIN);
+  lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_INDICATOR);
+  lv_obj_set_name(music_progress_bar, "music_bar");
+
+  // 时间标签 "当前时间 / 总时长"
+  music_time_label = lv_label_create(music_scr);
+  lv_obj_set_style_text_color(music_time_label, lv_color_hex(0x888888), 0);
+  lv_obj_set_style_text_font(music_time_label, geist_semibold_20, 0);
+  lv_obj_align(music_time_label, LV_ALIGN_CENTER, 0, 60);
+  lv_label_set_text(music_time_label, "0:00 / 0:00");
+  lv_obj_set_name(music_time_label, "music_time");
+
+  // 提示文字
+  lv_obj_t *hint = lv_label_create(music_scr);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x555555), 0);
+  lv_obj_set_style_text_font(hint, geist_semibold_20, 0);
+  lv_label_set_text(hint, "按电源键暂停");
+  lv_obj_align(hint, LV_ALIGN_CENTER, 0, 100);
+}
+
 void audio_task(void *param)
 {
   // SD卡已在setup()中初始化，这里不再重复
@@ -462,8 +519,7 @@ void audio_task(void *param)
 
   if (mp3Files.size() > 0)
   {
-    audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
-    Serial.println("Playing: " + mp3Files[currentMp3Index]);
+    Serial.printf("Found %d music files, waiting for button press.\n", (int)mp3Files.size());
   }
   else
   {
@@ -937,6 +993,7 @@ void setup()
 
   /* 时钟测试屏幕 */
   lv_obj_t *clock_scr = lv_obj_create(NULL);
+  clock_scr_global = clock_scr;
   lv_obj_set_style_bg_color(clock_scr, lv_color_black(), 0);
 
   lv_obj_t *clock_label = lv_label_create(clock_scr);
@@ -1025,6 +1082,8 @@ void setup()
   draw_music_icon(false);
   draw_spk_icon(pa_enabled, spk_volume);
 
+  // 预创建音乐播放页面
+  music_screen_create();
 
   lv_screen_load(clock_scr);
 
@@ -1115,6 +1174,18 @@ void loop()
       }
       draw_music_icon(playing);
     }
+
+    // ---- 更新音乐播放页面进度 ----
+    if (lv_screen_active() == music_scr && music_progress_bar && music_time_label) {
+      uint32_t cur = audio.getAudioCurrentTime();
+      uint32_t dur = audio.getAudioFileDuration();
+      int progress = (dur > 0) ? (int)((cur * 100) / dur) : 0;
+      lv_bar_set_value(music_progress_bar, progress, LV_ANIM_ON);
+      char timebuf[32];
+      snprintf(timebuf, sizeof(timebuf), "%u:%02u / %u:%02u",
+               cur / 60, cur % 60, dur / 60, dur % 60);
+      lv_label_set_text(music_time_label, timebuf);
+    }
   }
 
   // if (qmi.getDataReady())
@@ -1166,15 +1237,30 @@ void loop()
     uint32_t status = power.getIrqStatus();
     if (power.isPekeyShortPressIrq())
     {
-      // 短按：循环切换屏幕亮度档位
-      brightness_index = (brightness_index + 1) % brightness_level_count;
-      uint8_t bri = brightness_levels[brightness_index];
-      gfx->setBrightness(bri);
-      Serial.printf("Brightness: %d (level %d/%d)\n", bri, brightness_index + 1, brightness_level_count);
-      // 同步更新 LVGL 滑块
       lv_obj_t *scr = lv_screen_active();
-      lv_obj_t *sl = lv_obj_get_child_by_name(scr, "bri_slider");
-      if (sl) lv_slider_set_value(sl, bri, LV_ANIM_ON);
+      if (scr == music_scr) {
+        // 在音乐页面：暂停并回到时钟页面
+        audio.pauseResume();
+        lv_screen_load(clock_scr_global);
+        Serial.println("Paused, back to clock");
+      } else {
+        // 在时钟页面：开始/恢复播放并跳转到音乐页面
+        if (!audio.isRunning() && mp3Files.size() > 0) {
+          audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
+          Serial.println("Playing: " + mp3Files[currentMp3Index]);
+          // 用文件名作为初始标题
+          String fname = mp3Files[currentMp3Index];
+          int slash = fname.lastIndexOf('/');
+          String base = (slash >= 0) ? fname.substring(slash + 1) : fname;
+          int dot = base.lastIndexOf('.');
+          if (dot > 0) base = base.substring(0, dot);
+          strncpy(current_song_title, base.c_str(), sizeof(current_song_title) - 1);
+        }
+        if (music_scr == nullptr) music_screen_create();
+        lv_label_set_text(music_title_label, current_song_title);
+        lv_screen_load(music_scr);
+        Serial.println("Switched to music screen");
+      }
     }
     if (power.isPekeyLongPressIrq())
     {
@@ -1231,6 +1317,14 @@ void audio_id3data(const char *info)
 { // id3 metadata
   Serial.print("id3data     ");
   Serial.println(info);
+  // 捕获歌曲标题
+  if (strncmp(info, "Title: ", 7) == 0) {
+    strncpy(current_song_title, info + 7, sizeof(current_song_title) - 1);
+    current_song_title[sizeof(current_song_title) - 1] = '\0';
+    if (music_title_label) {
+      lv_label_set_text(music_title_label, current_song_title);
+    }
+  }
 }
 void audio_eof_mp3(const char *info)
 { // end of file
@@ -1241,6 +1335,14 @@ void audio_eof_mp3(const char *info)
     currentMp3Index = (currentMp3Index + 1) % mp3Files.size();
     audio.connecttoFS(SD_MMC, mp3Files[currentMp3Index].c_str());
     Serial.println("Playing: " + mp3Files[currentMp3Index]);
+    // 用文件名作为临时标题（ID3标题会在 audio_id3data 中更新）
+    String fname = mp3Files[currentMp3Index];
+    int slash = fname.lastIndexOf('/');
+    String base = (slash >= 0) ? fname.substring(slash + 1) : fname;
+    int dot = base.lastIndexOf('.');
+    if (dot > 0) base = base.substring(0, dot);
+    strncpy(current_song_title, base.c_str(), sizeof(current_song_title) - 1);
+    if (music_title_label) lv_label_set_text(music_title_label, current_song_title);
   }
 }
 void audio_showstation(const char *info)
