@@ -425,6 +425,7 @@ static lv_obj_t *music_scr = nullptr;
 static lv_obj_t *music_title_label = nullptr;
 static lv_obj_t *music_progress_bar = nullptr;  // 实际是 lv_slider
 static lv_obj_t *music_time_label = nullptr;
+static lv_obj_t *music_volume_bar = nullptr;    // 竖向音量滑动条
 static char current_song_title[128] = "Unknown";
 static bool music_slider_dragging = false;
 static uint32_t seek_target_sec = 0;
@@ -468,7 +469,7 @@ static void music_screen_create() {
   // 歌曲名称
   music_title_label = lv_label_create(music_scr);
   lv_obj_set_style_text_color(music_title_label, lv_color_white(), 0);
-  lv_obj_set_style_text_font(music_title_label, geist_semibold_20, 0);
+  lv_obj_set_style_text_font(music_title_label, chinese_24, 0);
   lv_label_set_long_mode(music_title_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_obj_set_width(music_title_label, 300);
   lv_obj_align(music_title_label, LV_ALIGN_CENTER, 0, -20);
@@ -477,22 +478,22 @@ static void music_screen_create() {
 
   // 进度滑块（可拖动跳转）
   music_progress_bar = lv_slider_create(music_scr);
-  lv_obj_set_size(music_progress_bar, 300, 8);
-  lv_obj_align(music_progress_bar, LV_ALIGN_CENTER, 0, 30);
+  lv_obj_set_size(music_progress_bar, 240, 14);
+  lv_obj_align(music_progress_bar, LV_ALIGN_CENTER, -20, 30);
   lv_slider_set_range(music_progress_bar, 0, 1000);
   lv_slider_set_value(music_progress_bar, 0, LV_ANIM_OFF);
   // 轨道
   lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x333333), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_MAIN);
+  lv_obj_set_style_radius(music_progress_bar, 7, LV_PART_MAIN);
   // 已播放部分
   lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x00AAFF), LV_PART_INDICATOR);
   lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
-  lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(music_progress_bar, 7, LV_PART_INDICATOR);
   // 把手
   lv_obj_set_style_bg_color(music_progress_bar, lv_color_white(), LV_PART_KNOB);
   lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_KNOB);
-  lv_obj_set_style_pad_all(music_progress_bar, 5, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(music_progress_bar, 6, LV_PART_KNOB);
   lv_obj_set_style_radius(music_progress_bar, LV_RADIUS_CIRCLE, LV_PART_KNOB);
   lv_obj_set_name(music_progress_bar, "music_bar");
   // 拖动时标记，松手时跳转
@@ -509,6 +510,38 @@ static void music_screen_create() {
     music_slider_dragging = false;
   }, LV_EVENT_RELEASED, NULL);
 
+  // 竖向音量滑动条
+  music_volume_bar = lv_slider_create(music_scr);
+  lv_slider_set_orientation(music_volume_bar, LV_SLIDER_ORIENTATION_VERTICAL);
+  lv_obj_set_size(music_volume_bar, 14, 120);
+  lv_obj_align(music_volume_bar, LV_ALIGN_CENTER, 110, 10);
+  lv_slider_set_range(music_volume_bar, 0, 21);
+  lv_slider_set_value(music_volume_bar, spk_volume, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(music_volume_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(music_volume_bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_radius(music_volume_bar, 7, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(music_volume_bar, lv_color_hex(0x00CC66), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(music_volume_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(music_volume_bar, 7, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(music_volume_bar, lv_color_white(), LV_PART_KNOB);
+  lv_obj_set_style_bg_opa(music_volume_bar, LV_OPA_COVER, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(music_volume_bar, 6, LV_PART_KNOB);
+  lv_obj_set_style_radius(music_volume_bar, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+  lv_obj_set_name(music_volume_bar, "music_vol");
+  // 音量图标标签
+  lv_obj_t *vol_icon = lv_label_create(music_scr);
+  lv_obj_set_style_text_color(vol_icon, lv_color_hex(0x00CC66), 0);
+  lv_obj_set_style_text_font(vol_icon, &lv_font_montserrat_20, 0);
+  lv_label_set_text(vol_icon, LV_SYMBOL_VOLUME_MAX);
+  lv_obj_align(vol_icon, LV_ALIGN_CENTER, 110, -65);
+  // 拖动时实时调整音量
+  lv_obj_add_event_cb(music_volume_bar, [](lv_event_t *e) {
+    int32_t val = lv_slider_get_value(music_volume_bar);
+    spk_volume = (int)val;
+    audio.setVolume(spk_volume);
+    if (spk_canvas) draw_spk_icon(pa_enabled, spk_volume);
+  }, LV_EVENT_VALUE_CHANGED, NULL);
+
   // 时间标签 "当前时间 / 总时长"
   music_time_label = lv_label_create(music_scr);
   lv_obj_set_style_text_color(music_time_label, lv_color_hex(0x888888), 0);
@@ -520,7 +553,7 @@ static void music_screen_create() {
   // 提示文字
   lv_obj_t *hint = lv_label_create(music_scr);
   lv_obj_set_style_text_color(hint, lv_color_hex(0x555555), 0);
-  lv_obj_set_style_text_font(hint, geist_semibold_20, 0);
+  lv_obj_set_style_text_font(hint, chinese_24, 0);
   lv_label_set_text(hint, "按电源键暂停");
   lv_obj_align(hint, LV_ALIGN_CENTER, 0, 100);
 }
