@@ -423,9 +423,36 @@ int currentMp3Index = 0;
 // ---- 音乐播放页面 ----
 static lv_obj_t *music_scr = nullptr;
 static lv_obj_t *music_title_label = nullptr;
-static lv_obj_t *music_progress_bar = nullptr;
+static lv_obj_t *music_progress_bar = nullptr;  // 实际是 lv_slider
 static lv_obj_t *music_time_label = nullptr;
 static char current_song_title[128] = "Unknown";
+static bool music_slider_dragging = false;
+static uint32_t seek_target_sec = 0;
+
+static void seek_task(void *param) {
+  // 1. 静音功放
+  digitalWrite(PA, LOW);
+  // 2. 暂停，让 audio_task 停止往 I2S 送数据
+  if (audio.isRunning()) audio.pauseResume();
+  vTaskDelay(pdMS_TO_TICKS(80));
+  // 3. seek
+  audio.setAudioPlayPosition((uint16_t)seek_target_sec);
+  vTaskDelay(pdMS_TO_TICKS(50));
+  // 4. 恢复播放
+  if (!audio.isRunning()) audio.pauseResume();
+  // 5. 等解码器输出稳定：播放时间确实在推进后再开功放，最多等 1s
+  uint32_t t0 = audio.getAudioCurrentTime();
+  uint32_t waited = 0;
+  while (waited < 1000) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+    waited += 50;
+    if (audio.isRunning() && audio.getAudioCurrentTime() != t0) break;
+  }
+  // 再多等一点让缓冲区填满干净数据
+  vTaskDelay(pdMS_TO_TICKS(150));
+  digitalWrite(PA, HIGH);
+  vTaskDelete(NULL);
+}
 
 static void music_screen_create() {
   music_scr = lv_obj_create(NULL);
@@ -448,17 +475,39 @@ static void music_screen_create() {
   lv_label_set_text(music_title_label, current_song_title);
   lv_obj_set_name(music_title_label, "music_title");
 
-  // 进度条
-  music_progress_bar = lv_bar_create(music_scr);
+  // 进度滑块（可拖动跳转）
+  music_progress_bar = lv_slider_create(music_scr);
   lv_obj_set_size(music_progress_bar, 300, 8);
   lv_obj_align(music_progress_bar, LV_ALIGN_CENTER, 0, 30);
-  lv_bar_set_range(music_progress_bar, 0, 100);
-  lv_bar_set_value(music_progress_bar, 0, LV_ANIM_OFF);
+  lv_slider_set_range(music_progress_bar, 0, 1000);
+  lv_slider_set_value(music_progress_bar, 0, LV_ANIM_OFF);
+  // 轨道
   lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x333333), LV_PART_MAIN);
-  lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x00AAFF), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_MAIN);
+  // 已播放部分
+  lv_obj_set_style_bg_color(music_progress_bar, lv_color_hex(0x00AAFF), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
   lv_obj_set_style_radius(music_progress_bar, 4, LV_PART_INDICATOR);
+  // 把手
+  lv_obj_set_style_bg_color(music_progress_bar, lv_color_white(), LV_PART_KNOB);
+  lv_obj_set_style_bg_opa(music_progress_bar, LV_OPA_COVER, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(music_progress_bar, 5, LV_PART_KNOB);
+  lv_obj_set_style_radius(music_progress_bar, LV_RADIUS_CIRCLE, LV_PART_KNOB);
   lv_obj_set_name(music_progress_bar, "music_bar");
+  // 拖动时标记，松手时跳转
+  lv_obj_add_event_cb(music_progress_bar, [](lv_event_t *e) {
+    music_slider_dragging = true;
+  }, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(music_progress_bar, [](lv_event_t *e) {
+    uint32_t dur = audio.getAudioFileDuration();
+    if (dur > 0) {
+      int32_t val = lv_slider_get_value(music_progress_bar);
+      seek_target_sec = (uint32_t)((val * dur) / 1000);
+      xTaskCreatePinnedToCore(seek_task, "seek_task", 4096, NULL, 2, NULL, 1);
+    }
+    music_slider_dragging = false;
+  }, LV_EVENT_RELEASED, NULL);
 
   // 时间标签 "当前时间 / 总时长"
   music_time_label = lv_label_create(music_scr);
@@ -1179,8 +1228,10 @@ void loop()
     if (lv_screen_active() == music_scr && music_progress_bar && music_time_label) {
       uint32_t cur = audio.getAudioCurrentTime();
       uint32_t dur = audio.getAudioFileDuration();
-      int progress = (dur > 0) ? (int)((cur * 100) / dur) : 0;
-      lv_bar_set_value(music_progress_bar, progress, LV_ANIM_ON);
+      if (!music_slider_dragging) {
+        int32_t progress = (dur > 0) ? (int32_t)((cur * 1000) / dur) : 0;
+        lv_slider_set_value(music_progress_bar, progress, LV_ANIM_OFF);
+      }
       char timebuf[32];
       snprintf(timebuf, sizeof(timebuf), "%u:%02u / %u:%02u",
                cur / 60, cur % 60, dur / 60, dur % 60);
