@@ -15,7 +15,8 @@
 #include <ArduinoJson.h>
 #include <SD_MMC.h>
 
-// 语音对话模块
+#include "lv_fs_sdmmc.h"   // LVGL SD_MMC 文件系统驱动
+#include "lv_fs_memfile.h" // LVGL 内存文件系统驱动（加速字体加载）
 #include "wifi_config.h"
 #include "aliyun_asr.h"
 #include "qwen_llm.h"
@@ -332,68 +333,120 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     }
 }
 
-// ===== 创建 UI =====
-static void create_ui(void) {
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
+// ===== 字体相关 =====
+static lv_font_t *g_font_cn_16 = nullptr;
+static lv_font_t *g_font_cn_20 = nullptr;
+static lv_font_t *g_font_cn_24 = nullptr;
 
-    // 标题
-    lv_obj_t *lbl_title = lv_label_create(scr);
-    lv_label_set_text(lbl_title, "AI 语音助手");
-    lv_obj_set_style_text_color(lbl_title, lv_color_hex(0x00d4ff), 0);
-    lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_24, 0);
-    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 0, 20);
+// 需要在字体加载后更新字体的标签（全局保存引用）
+static lv_obj_t *g_lbl_title       = nullptr;
+static lv_obj_t *g_lbl_asr_title   = nullptr;
+static lv_obj_t *g_lbl_reply_title = nullptr;
+static lv_obj_t *g_lbl_hint        = nullptr;
 
-    // 状态标签
-    lbl_status = lv_label_create(scr);
-    lv_label_set_text(lbl_status, "初始化中...");
+static const lv_font_t *cn_font(lv_font_t *cn, const lv_font_t *fallback) {
+    return cn ? cn : fallback;
+}
+
+// 字体加载完成后，切换到主 UI 屏幕
+static void apply_cn_fonts(void) {
+    // 创建主 UI 屏幕（替换 Loading 屏）
+    lv_obj_t *main_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x1a1a2e), 0);
+
+    g_lbl_title = lv_label_create(main_scr);
+    lv_label_set_text(g_lbl_title, "AI \xe8\xaf\xad\xe9\x9f\xb3\xe5\x8a\xa9\xe6\x89\x8b");  // "AI 语音助手"
+    lv_obj_set_style_text_color(g_lbl_title, lv_color_hex(0x00d4ff), 0);
+    lv_obj_set_style_text_font(g_lbl_title, g_font_cn_24 ? g_font_cn_24 : &lv_font_montserrat_24, 0);
+    lv_obj_align(g_lbl_title, LV_ALIGN_TOP_MID, 0, 20);
+
+    lbl_status = lv_label_create(main_scr);
+    lv_label_set_text(lbl_status, "\xe7\xad\x89\xe5\xbe\x85\xe5\x94\xa4\xe9\x86\x92...");  // "等待唤醒..."
     lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xffd700), 0);
-    lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(lbl_status, g_font_cn_20 ? g_font_cn_20 : &lv_font_montserrat_18, 0);
     lv_obj_align(lbl_status, LV_ALIGN_TOP_MID, 0, 60);
 
-    // 分隔线
-    lv_obj_t *line = lv_obj_create(scr);
+    lv_obj_t *line = lv_obj_create(main_scr);
     lv_obj_set_size(line, 400, 2);
     lv_obj_set_style_bg_color(line, lv_color_hex(0x444466), 0);
     lv_obj_set_style_border_width(line, 0, 0);
     lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 100);
 
-    // ASR 结果标签
-    lv_obj_t *lbl_asr_title = lv_label_create(scr);
-    lv_label_set_text(lbl_asr_title, "你说：");
-    lv_obj_set_style_text_color(lbl_asr_title, lv_color_hex(0x88aaff), 0);
-    lv_obj_set_style_text_font(lbl_asr_title, &lv_font_montserrat_16, 0);
-    lv_obj_align(lbl_asr_title, LV_ALIGN_TOP_LEFT, 30, 115);
+    g_lbl_asr_title = lv_label_create(main_scr);
+    lv_label_set_text(g_lbl_asr_title, "\xe4\xbd\xa0\xe8\xaf\xb4\xef\xbc\x9a");  // "你说："
+    lv_obj_set_style_text_color(g_lbl_asr_title, lv_color_hex(0x88aaff), 0);
+    lv_obj_set_style_text_font(g_lbl_asr_title, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
+    lv_obj_align(g_lbl_asr_title, LV_ALIGN_TOP_LEFT, 30, 115);
 
-    lbl_asr = lv_label_create(scr);
+    lbl_asr = lv_label_create(main_scr);
     lv_label_set_text(lbl_asr, "");
     lv_label_set_long_mode(lbl_asr, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl_asr, 400);
     lv_obj_set_style_text_color(lbl_asr, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lbl_asr, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(lbl_asr, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
     lv_obj_align(lbl_asr, LV_ALIGN_TOP_LEFT, 30, 140);
 
-    // AI 回复标签
-    lv_obj_t *lbl_reply_title = lv_label_create(scr);
-    lv_label_set_text(lbl_reply_title, "AI：");
-    lv_obj_set_style_text_color(lbl_reply_title, lv_color_hex(0x88ffaa), 0);
-    lv_obj_set_style_text_font(lbl_reply_title, &lv_font_montserrat_16, 0);
-    lv_obj_align(lbl_reply_title, LV_ALIGN_TOP_LEFT, 30, 250);
+    g_lbl_reply_title = lv_label_create(main_scr);
+    lv_label_set_text(g_lbl_reply_title, "AI\xef\xbc\x9a");  // "AI："
+    lv_obj_set_style_text_color(g_lbl_reply_title, lv_color_hex(0x88ffaa), 0);
+    lv_obj_set_style_text_font(g_lbl_reply_title, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
+    lv_obj_align(g_lbl_reply_title, LV_ALIGN_TOP_LEFT, 30, 250);
 
-    lbl_reply = lv_label_create(scr);
+    lbl_reply = lv_label_create(main_scr);
     lv_label_set_text(lbl_reply, "");
     lv_label_set_long_mode(lbl_reply, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl_reply, 400);
     lv_obj_set_style_text_color(lbl_reply, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lbl_reply, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(lbl_reply, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
     lv_obj_align(lbl_reply, LV_ALIGN_TOP_LEFT, 30, 275);
 
-    // 底部提示
-    lv_obj_t *lbl_hint = lv_label_create(scr);
-    lv_label_set_text(lbl_hint, "说 '小美同学' 唤醒");
-    lv_obj_set_style_text_color(lbl_hint, lv_color_hex(0x666688), 0);
-    lv_obj_set_style_text_font(lbl_hint, &lv_font_montserrat_14, 0);
-    lv_obj_align(lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+    g_lbl_hint = lv_label_create(main_scr);
+    lv_label_set_text(g_lbl_hint, "\xe8\xaf\xb4 '\xe5\xb0\x8f\xe7\xbe\x8e\xe5\x90\x8c\xe5\xad\xa6' \xe5\x94\xa4\xe9\x86\x92");  // "说 '小美同学' 唤醒"
+    lv_obj_set_style_text_color(g_lbl_hint, lv_color_hex(0x666688), 0);
+    lv_obj_set_style_text_font(g_lbl_hint, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_14, 0);
+    lv_obj_align(g_lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+
+    // 切换到主屏幕（带淡入动画）
+    lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
+    Serial.println("[FONT] 主界面已显示");
+}
+
+// 后台字体加载任务（Core 0，低优先级，不阻塞 UI）
+static void font_load_task(void *param) {
+    uint32_t t = millis();
+    // 先把文件整体读入 PSRAM，再从内存解析（避免 SD 卡随机读慢）
+    g_font_cn_24 = load_font_from_sd("/fonts/cn24.bin", 'A');
+    g_font_cn_20 = load_font_from_sd("/fonts/cn20.bin", 'B');
+    g_font_cn_16 = load_font_from_sd("/fonts/cn16.bin", 'C');
+    Serial.printf("[FONT] 全部加载完成，总耗时 %lu ms\n", millis() - t);
+    // 通过 LVGL 定时器在主任务上下文中安全更新 UI
+    lv_timer_t *tmr = lv_timer_create([](lv_timer_t *t) {
+        apply_cn_fonts();
+        lv_timer_del(t);
+    }, 10, nullptr);
+    (void)tmr;
+    vTaskDelete(NULL);
+}
+
+static void create_ui(void) {
+    // Loading 屏：字体加载完成前显示，全用 Montserrat（无需中文字体）
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
+
+    lv_obj_t *lbl = lv_label_create(scr);
+    lv_label_set_text(lbl, "Loading...");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -20);
+
+    lv_obj_t *lbl_sub = lv_label_create(scr);
+    lv_label_set_text(lbl_sub, "Loading fonts from SD card");
+    lv_obj_set_style_text_color(lbl_sub, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(lbl_sub, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_sub, LV_ALIGN_CENTER, 0, 20);
+
+    // 后台异步加载字体（Core 0，优先级 2）
+    xTaskCreatePinnedToCore(font_load_task, "font_load", 4096, NULL, 2, NULL, 0);
 }
 
 // ===== setup =====
@@ -405,9 +458,9 @@ void setup() {
     pinMode(PA, OUTPUT);
     digitalWrite(PA, HIGH);
 
-    // SD 卡初始化
+    // SD 卡初始化（1线模式，提高时钟到 40MHz）
     SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-    if (!SD_MMC.begin("/sdcard", true)) {
+    if (!SD_MMC.begin("/sdcard", true, false, 40000)) {  // 40MHz 时钟
         Serial.println("[SD] 初始化失败!");
     } else {
         Serial.println("[SD] 初始化成功");
@@ -427,12 +480,15 @@ void setup() {
 
     // LVGL 初始化
     lv_init();
+    lv_fs_sdmmc_init();  // 注册 SD_MMC 文件系统驱动（盘符 'S'）
 #if LV_USE_LOG != 0
     lv_log_register_print_cb(my_print);
 #endif
 
+    // draw buffer 必须在内部 RAM（DMA 可访问），不能用 PSRAM
     lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
-        screenWidth * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+        screenWidth * 40 * sizeof(lv_color_t),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     lv_disp_draw_buf_init(&draw_buf, buf1, NULL, screenWidth * 40);
 
     static lv_disp_drv_t disp_drv;
