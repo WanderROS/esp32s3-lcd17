@@ -39,7 +39,7 @@ static volatile bool wake_detected = false;
 
 // ===== 音频配置 =====
 #define EXAMPLE_SAMPLE_RATE     16000
-#define EXAMPLE_VOICE_VOLUME    60  // 降低音量避免功放过驱动破音（范围 0~100）
+#define EXAMPLE_VOICE_VOLUME    75  // 降低音量避免功放过驱动破音（范围 0~100）
 #define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(6)
 #define EXAMPLE_ES7210_MIC_GAIN GAIN_30DB
 #define RECORD_TIME_SEC         6
@@ -172,11 +172,19 @@ void audio_task(void *param) {
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
+    // 免唤醒窗口截止时间（在 lambda 里访问需要用全局变量）
+    static uint32_t s_free_talk_until = 0;
+
     // --- 初始化 ESP_SR 唤醒词检测 ---
     ESP_SR.onEvent([](sr_event_t event, int command_id, int phrase_id) {
         switch (event) {
             case SR_EVENT_WAKEWORD:
                 Serial.println("[SR] 唤醒词检测到!");
+                // 免唤醒窗口内：第一阶段就触发，响应更快
+                if (voice_state == STATE_IDLE && millis() < s_free_talk_until) {
+                    wake_detected = true;
+                    Serial.println("[SR] 免唤醒窗口内直接触发");
+                }
                 break;
             case SR_EVENT_WAKEWORD_CHANNEL:
                 Serial.printf("[SR] 唤醒词通道 %d 确认!\n", command_id);
@@ -209,7 +217,12 @@ void audio_task(void *param) {
     }
 
     // ===== 主循环 =====
+    #define FREE_TALK_TIMEOUT_MS 30000  // 免唤醒窗口 30 秒
+    // s_free_talk_until 已在上方声明为 static
+
     while (1) {
+        bool in_free_talk = (millis() < s_free_talk_until);
+
         if (wake_detected) {
             wake_detected = false;
             voice_state = STATE_RECORDING;
@@ -228,6 +241,7 @@ void audio_task(void *param) {
             if (!rec_ok) {
                 Serial.println("[REC] 录音失败，返回唤醒模式");
                 ui_set_status("录音失败，重试...");
+                s_free_talk_until = 0;
                 voice_state = STATE_IDLE;
                 ESP_SR.setMode(SR_MODE_WAKEWORD);
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -244,11 +258,12 @@ void audio_task(void *param) {
 
             if (!asr_ok || asr_text.isEmpty()) {
                 Serial.println("[ASR] 识别失败或无内容");
-                ui_set_status("未识别到语音，重试...");
-                aliyun_tts_speak("抱歉，我没有听清楚，请再说一遍。");
+                // 免唤醒窗口内无内容 = 用户不想继续，退出免唤醒
+                s_free_talk_until = 0;
+                ui_set_status("等待唤醒...");
                 voice_state = STATE_IDLE;
                 ESP_SR.setMode(SR_MODE_WAKEWORD);
-                vTaskDelay(pdMS_TO_TICKS(500));
+                vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
 
@@ -267,6 +282,7 @@ void audio_task(void *param) {
                 Serial.println("[LLM] 推理失败");
                 ui_set_status("网络错误，重试...");
                 aliyun_tts_speak("抱歉，网络出现问题，请稍后再试。");
+                s_free_talk_until = 0;
                 voice_state = STATE_IDLE;
                 ESP_SR.setMode(SR_MODE_WAKEWORD);
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -283,12 +299,27 @@ void audio_task(void *param) {
 
             aliyun_tts_speak(llm_reply);
 
-            // 5. 完成，返回唤醒模式
-            Serial.println("===== 完成，继续监听 =====\n");
-            ui_set_status("等待唤醒...");
+            // 5. 完成：刷新免唤醒窗口，直接触发下一轮录音
+            s_free_talk_until = millis() + FREE_TALK_TIMEOUT_MS;
+            Serial.printf("[SR] 免唤醒窗口激活，剩余 %lu ms\n",
+                          s_free_talk_until - millis());
+            ui_set_status("继续说话 (30s)...");
             voice_state = STATE_IDLE;
             ESP_SR.setMode(SR_MODE_WAKEWORD);
-            vTaskDelay(pdMS_TO_TICKS(200));
+            // 等待 TTS 播放声音消散，避免录到自己的声音
+            vTaskDelay(pdMS_TO_TICKS(800));
+            // 免唤醒：直接进入下一轮录音，无需唤醒词
+            wake_detected = true;
+        }
+
+        // 免唤醒窗口倒计时提示（每5秒更新一次状态栏）
+        if (s_free_talk_until > 0 && voice_state == STATE_IDLE) {
+            uint32_t now = millis();
+            if (now >= s_free_talk_until) {
+                s_free_talk_until = 0;
+                ui_set_status("等待唤醒...");
+                Serial.println("[SR] 免唤醒窗口已过期");
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
