@@ -7,7 +7,7 @@
 // ===== 阿里云 ASR 配置 =====
 // 控制台: https://nls-portal.console.aliyun.com/
 #define ALIYUN_ASR_APPKEY  "ITUQNVR3Jrs3sZIU"
-#define ALIYUN_ACCESS_TOKEN "35c197e5514740dcb1641fe4a07570f8"  // 从阿里云 NLS 获取
+#define ALIYUN_ACCESS_TOKEN "6a360d5f4f754cb69378adbe1671531a"  // 从阿里云 NLS 获取
 
 // ===== 阿里云百炼 API 配置 =====
 // 控制台: https://bailian.console.aliyun.com → API-KEY 管理

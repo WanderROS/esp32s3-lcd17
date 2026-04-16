@@ -13,10 +13,9 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <SD_MMC.h>
+#include <SPIFFS.h>
 
-#include "lv_fs_sdmmc.h"   // LVGL SD_MMC 文件系统驱动
-#include "lv_fs_memfile.h" // LVGL 内存文件系统驱动（加速字体加载）
+#include "lv_fs_memfile.h" // LVGL 内存文件系统驱动
 #include "wifi_config.h"
 #include "aliyun_asr.h"
 #include "qwen_llm.h"
@@ -445,10 +444,9 @@ static void apply_cn_fonts(void) {
 // 后台字体加载任务（Core 0，低优先级，不阻塞 UI）
 static void font_load_task(void *param) {
     uint32_t t = millis();
-    // 先把文件整体读入 PSRAM，再从内存解析（避免 SD 卡随机读慢）
-    g_font_cn_24 = load_font_from_sd("/fonts/cn24.bin", 'A');
-    g_font_cn_20 = load_font_from_sd("/fonts/cn20.bin", 'B');
-    g_font_cn_16 = load_font_from_sd("/fonts/cn16.bin", 'C');
+    g_font_cn_24 = load_font_from_flash("/fonts/cn24.bin", 'A');
+    g_font_cn_20 = load_font_from_flash("/fonts/cn20.bin", 'B');
+    g_font_cn_16 = load_font_from_flash("/fonts/cn16.bin", 'C');
     Serial.printf("[FONT] 全部加载完成，总耗时 %lu ms\n", millis() - t);
     // 通过 LVGL 定时器在主任务上下文中安全更新 UI
     lv_timer_t *tmr = lv_timer_create([](lv_timer_t *t) {
@@ -489,12 +487,11 @@ void setup() {
     pinMode(PA, OUTPUT);
     digitalWrite(PA, HIGH);
 
-    // SD 卡初始化（1线模式，提高时钟到 40MHz）
-    SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-    if (!SD_MMC.begin("/sdcard", true, false, 40000)) {  // 40MHz 时钟
-        Serial.println("[SD] 初始化失败!");
+    // SPIFFS 初始化（字体文件存储在 Flash）
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[SPIFFS] 初始化失败!");
     } else {
-        Serial.println("[SD] 初始化成功");
+        Serial.println("[SPIFFS] 初始化成功");
     }
 
     // 触摸初始化
@@ -511,7 +508,6 @@ void setup() {
 
     // LVGL 初始化
     lv_init();
-    lv_fs_sdmmc_init();  // 注册 SD_MMC 文件系统驱动（盘符 'S'）
 #if LV_USE_LOG != 0
     lv_log_register_print_cb(my_print);
 #endif
