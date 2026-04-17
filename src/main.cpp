@@ -204,7 +204,7 @@ void audio_task(void *param) {
         Serial.println("[SR] ESP_SR 初始化失败!");
         vTaskDelete(NULL);
     }
-    Serial.println("[SR] 等待唤醒词 '小美同学'...");
+    Serial.println("[SR] 等待唤醒词 '小爱同学'...");
     ui_set_status("等待唤醒...");
 
     // --- 分配录音缓冲区 ---
@@ -431,7 +431,7 @@ static void apply_cn_fonts(void) {
     lv_obj_align(lbl_reply, LV_ALIGN_TOP_LEFT, 30, 275);
 
     g_lbl_hint = lv_label_create(main_scr);
-    lv_label_set_text(g_lbl_hint, "\xe8\xaf\xb4 '\xe5\xb0\x8f\xe7\xbe\x8e\xe5\x90\x8c\xe5\xad\xa6' \xe5\x94\xa4\xe9\x86\x92");  // "说 '小美同学' 唤醒"
+    lv_label_set_text(g_lbl_hint, "\xe8\xaf\xb4 '\xe5\xb0\x8f\xe7\x88\xb1\xe5\x90\x8c\xe5\xad\xa6' \xe5\x94\xa4\xe9\x86\x92");  // "说 '小爱同学' 唤醒"
     lv_obj_set_style_text_color(g_lbl_hint, lv_color_hex(0x666688), 0);
     lv_obj_set_style_text_font(g_lbl_hint, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_14, 0);
     lv_obj_align(g_lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
