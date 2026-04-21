@@ -21,9 +21,30 @@
 #include "aliyun_asr.h"
 #include "qwen_llm.h"
 #include "aliyun_tts.h"
+#include "map_screen.h"    // 地图界面
 
 // ===== 唤醒词命令（保留用于触发录音） =====
 static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒词
+
+// ===== 地图 =====
+static MapScreen g_map;
+static bool g_map_visible = false;  // 当前是否显示地图界面
+
+// 模拟 GPS 路径（北京市区，每步约 50 米）
+static const double SIM_GPS_PATH[][2] = {
+    {39.9042, 116.4074},  // 天安门
+    {39.9055, 116.4100},
+    {39.9068, 116.4130},
+    {39.9080, 116.4160},
+    {39.9095, 116.4190},
+    {39.9110, 116.4220},
+    {39.9125, 116.4250},
+    {39.9140, 116.4280},
+    {39.9155, 116.4310},
+    {39.9170, 116.4340},
+};
+static const int SIM_GPS_COUNT = sizeof(SIM_GPS_PATH) / sizeof(SIM_GPS_PATH[0]);
+static int s_sim_gps_idx = 0;
 
 // ===== 状态机 =====
 enum VoiceState {
@@ -467,7 +488,55 @@ static void apply_cn_fonts(void) {
     lv_obj_set_style_text_font(btn_lbl, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_14, 0);
     lv_obj_center(btn_lbl);
 
-    // 切换到主屏幕（带淡入动画）
+    // 地图按钮（重置配网正上方）
+    lv_obj_t *btn_map = lv_btn_create(main_scr);
+    lv_obj_set_size(btn_map, 120, 36);
+    lv_obj_align(btn_map, LV_ALIGN_BOTTOM_MID, 0, -56);
+    lv_obj_set_style_bg_color(btn_map, lv_color_hex(0x1a3a1a), 0);
+    lv_obj_set_style_bg_color(btn_map, lv_color_hex(0x207a20), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn_map, lv_color_hex(0x44aa44), 0);
+    lv_obj_set_style_border_width(btn_map, 1, 0);
+    lv_obj_set_style_radius(btn_map, 8, 0);
+    lv_obj_add_event_cb(btn_map, [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            Serial.println("[UI] 切换到地图界面");
+            lv_obj_t *map_scr = lv_obj_create(NULL);
+            lv_obj_set_style_bg_color(map_scr, lv_color_hex(0x1a1a2e), 0);
+            g_map.begin(map_scr);
+            g_map.forceUpdate();
+            g_map_visible = true;
+
+            // 返回按钮
+            lv_obj_t *btn_back = lv_btn_create(map_scr);
+            lv_obj_set_size(btn_back, 60, 36);
+            lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 8);
+            lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x222244), 0);
+            lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x4444aa), LV_STATE_PRESSED);
+            lv_obj_set_style_border_color(btn_back, lv_color_hex(0x6666cc), 0);
+            lv_obj_set_style_border_width(btn_back, 1, 0);
+            lv_obj_set_style_radius(btn_back, 8, 0);
+            lv_obj_add_event_cb(btn_back, [](lv_event_t *e2) {
+                if (lv_event_get_code(e2) == LV_EVENT_CLICKED) {
+                    g_map_visible = false;
+                    lv_scr_load_anim(g_main_scr, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, true);
+                }
+            }, LV_EVENT_CLICKED, nullptr);
+            lv_obj_t *back_lbl = lv_label_create(btn_back);
+            lv_label_set_text(back_lbl, "< Back");
+            lv_obj_set_style_text_color(back_lbl, lv_color_white(), 0);
+            lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_12, 0);
+            lv_obj_center(back_lbl);
+
+            lv_scr_load_anim(map_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+        }
+    }, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *map_btn_lbl = lv_label_create(btn_map);
+    lv_label_set_text(map_btn_lbl, "Map");
+    lv_obj_set_style_text_color(map_btn_lbl, lv_color_hex(0x88ff88), 0);
+    lv_obj_set_style_text_font(map_btn_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(map_btn_lbl);
+
     // 若配网仍在进行，先保存引用，等配网完成后再切换
     g_main_scr = main_scr;
 
@@ -564,6 +633,16 @@ static void create_ui(void) {
 
     // 后台异步加载字体（Core 0，优先级 2）
     xTaskCreatePinnedToCore(font_load_task, "font_load", 4096, NULL, 2, NULL, 0);
+}
+
+// ===== 地图更新任务（Core 0，低优先级，负责 HTTP 下载瓦片）=====
+static void map_update_task(void *param) {
+    while (1) {
+        if (g_map_visible && g_map._needsUpdate) {
+            g_map.updateIfNeeded();
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
 }
 
 // ===== setup =====
@@ -677,11 +756,27 @@ void setup() {
     // 启动音频任务（Core 1，高优先级）
     xTaskCreatePinnedToCore(audio_task, "audio_task", 12288, NULL, 5, NULL, 1);
 
+    // 启动地图更新任务（Core 0，低优先级，负责 HTTP 下载瓦片）
+    xTaskCreatePinnedToCore(map_update_task, "map_update", 8192, NULL, 1, NULL, 0);
+
     Serial.println("[SETUP] 初始化完成");
 }
 
 // ===== loop（Core 0，运行 LVGL）=====
+
 void loop() {
     lv_timer_handler();
+
+    // 模拟 GPS：每 4 秒移动一步，仅在地图界面可见时更新
+    static uint32_t lastGpsTick = 0;
+    if (g_map_visible && millis() - lastGpsTick > 4000) {
+        lastGpsTick = millis();
+        double lat = SIM_GPS_PATH[s_sim_gps_idx][0];
+        double lon = SIM_GPS_PATH[s_sim_gps_idx][1];
+        s_sim_gps_idx = (s_sim_gps_idx + 1) % SIM_GPS_COUNT;
+        Serial.printf("[GPS-SIM] lat=%.5f lon=%.5f\n", lat, lon);
+        g_map.setPosition(lat, lon);
+    }
+
     delay(5);
 }
