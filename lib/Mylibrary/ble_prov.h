@@ -2,28 +2,29 @@
 /**
  * BLE Wi-Fi Provisioning
  *
- * 使用 ESP-IDF network_provisioning 组件 + BLE 传输层。
+ * 使用 Arduino WiFiProv 库（ESP-IDF network_provisioning 的封装）。
  * 配套手机 App：ESP BLE Provisioning（乐鑫官方，iOS/Android）
  *
  * 流程：
- *   1. 首次启动（NVS 无凭证）→ 进入 BLE 配网模式，屏幕显示设备名
- *   2. 手机 App 扫描设备 → 输入 Wi-Fi 密码 → 发送给设备
- *   3. 设备连接 Wi-Fi 成功 → 凭证写入 NVS → 进入正常模式
+ *   1. 首次启动（NVS 无凭证）→ 进入 BLE 配网模式，屏幕显示二维码
+ *   2. 手机 App 扫码 → 输入 Wi-Fi 密码 → 发送给设备
+ *   3. 设备连接 Wi-Fi 成功 → 凭证自动保存到 NVS
  *   4. 后续启动直接从 NVS 读取凭证，跳过配网
  *
  * 长按 BOOT 按钮（GPIO 0）3 秒可清除凭证，重新进入配网模式。
  */
 
 #include <WiFi.h>
-#include <Preferences.h>
-#include <esp_wifi.h>
-#include <esp_bt.h>
-#include <network_provisioning/manager.h>
-#include <network_provisioning/scheme_ble.h>
+#include <WiFiProv.h>
 
-// BLE 广播名前缀（手机 App 搜索时显示）
-#ifndef BLE_PROV_DEVICE_NAME
-#define BLE_PROV_DEVICE_NAME "AIBOX"
+// BLE 设备名（Espressif App 要求 PROV_ 前缀）
+#ifndef BLE_PROV_SERVICE_NAME
+#define BLE_PROV_SERVICE_NAME "PROV_AIBOX"
+#endif
+
+// Proof of Possession 配对密码（空字符串 = 无密码）
+#ifndef BLE_PROV_POP
+#define BLE_PROV_POP ""
 #endif
 
 // 长按清除凭证的 GPIO（BOOT 按钮）
@@ -31,38 +32,55 @@
 #define BLE_PROV_RESET_GPIO 0
 #endif
 
-// NVS 命名空间 & 键名
-#define NVS_NS   "wifi_cred"
-#define NVS_SSID "ssid"
-#define NVS_PASS "pass"
-
 // ─────────────────────────────────────────────
-// 内部实现
+// 内部状态
 // ─────────────────────────────────────────────
 namespace _ble_prov_impl {
 
-static Preferences _prefs;
+static volatile bool _wifi_connected = false;
+static volatile bool _prov_failed    = false;
+static volatile bool _prov_ended     = false;
 
-static bool load_credentials(String &ssid, String &pass) {
-    _prefs.begin(NVS_NS, true);
-    ssid = _prefs.getString(NVS_SSID, "");
-    pass = _prefs.getString(NVS_PASS, "");
-    _prefs.end();
-    return ssid.length() > 0;
-}
+static void (*_on_prov_start_cb)(const char *qr_payload, const char *dev_name) = nullptr;
 
-static void save_credentials(const char *ssid, const char *pass) {
-    _prefs.begin(NVS_NS, false);
-    _prefs.putString(NVS_SSID, ssid);
-    _prefs.putString(NVS_PASS, pass);
-    _prefs.end();
-}
-
-static void clear_credentials() {
-    _prefs.begin(NVS_NS, false);
-    _prefs.clear();
-    _prefs.end();
-    Serial.println("[BLE_PROV] 凭证已清除");
+static void wifi_event_cb(arduino_event_t *event) {
+    switch (event->event_id) {
+        case ARDUINO_EVENT_PROV_START:
+            Serial.println("[BLE_PROV] 配网已启动，等待手机连接...");
+            if (_on_prov_start_cb) {
+                char qr_payload[128];
+                snprintf(qr_payload, sizeof(qr_payload),
+                    "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"ble\"}",
+                    BLE_PROV_SERVICE_NAME, BLE_PROV_POP);
+                _on_prov_start_cb(qr_payload, BLE_PROV_SERVICE_NAME);
+            }
+            break;
+        case ARDUINO_EVENT_PROV_CRED_RECV:
+            Serial.printf("[BLE_PROV] 收到凭证: SSID=%s\n",
+                (const char *)event->event_info.prov_cred_recv.ssid);
+            break;
+        case ARDUINO_EVENT_PROV_CRED_FAIL:
+            Serial.println("[BLE_PROV] 凭证验证失败");
+            _prov_failed = true;
+            break;
+        case ARDUINO_EVENT_PROV_CRED_SUCCESS:
+            Serial.println("[BLE_PROV] Wi-Fi 验证成功！");
+            break;
+        case ARDUINO_EVENT_PROV_END:
+            Serial.println("[BLE_PROV] 配网结束，BLE 资源已释放");
+            _prov_ended = true;
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.printf("[BLE_PROV] 已连接，IP: %s\n",
+                IPAddress(event->event_info.got_ip.ip_info.ip.addr).toString().c_str());
+            _wifi_connected = true;
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            _wifi_connected = false;
+            break;
+        default:
+            break;
+    }
 }
 
 static bool reset_requested() {
@@ -81,42 +99,6 @@ static bool reset_requested() {
     return false;
 }
 
-// network_provisioning 事件回调
-static void prov_event_handler(void *arg, esp_event_base_t base,
-                               int32_t id, void *data) {
-    if (base == NETWORK_PROV_EVENT) {
-        switch (id) {
-            case NETWORK_PROV_START:
-                Serial.println("[BLE_PROV] 配网已启动，等待手机连接...");
-                break;
-            case NETWORK_PROV_WIFI_CRED_RECV: {
-                wifi_sta_config_t *cfg = (wifi_sta_config_t *)data;
-                Serial.printf("[BLE_PROV] 收到凭证: SSID=%s\n", cfg->ssid);
-                save_credentials((const char *)cfg->ssid, (const char *)cfg->password);
-                break;
-            }
-            case NETWORK_PROV_WIFI_CRED_FAIL: {
-                network_prov_wifi_sta_fail_reason_t *reason =
-                    (network_prov_wifi_sta_fail_reason_t *)data;
-                Serial.printf("[BLE_PROV] 凭证验证失败: %s\n",
-                    (*reason == NETWORK_PROV_WIFI_STA_AUTH_ERROR) ? "认证错误" : "AP 未找到");
-                clear_credentials();
-                network_prov_mgr_reset_wifi_sm_state_on_failure();
-                break;
-            }
-            case NETWORK_PROV_WIFI_CRED_SUCCESS:
-                Serial.println("[BLE_PROV] Wi-Fi 验证成功！");
-                break;
-            case NETWORK_PROV_END:
-                Serial.println("[BLE_PROV] 配网结束，释放资源");
-                network_prov_mgr_deinit();
-                break;
-            default:
-                break;
-        }
-    }
-}
-
 } // namespace _ble_prov_impl
 
 // ─────────────────────────────────────────────
@@ -124,128 +106,102 @@ static void prov_event_handler(void *arg, esp_event_base_t base,
 // ─────────────────────────────────────────────
 
 /**
- * 初始化并执行配网流程（阻塞直到 Wi-Fi 连接成功）。
+ * 启动配网流程（非阻塞，立即返回）。
+ * 内部通过 WiFi.onEvent 异步处理配网事件。
  *
- * @param status_cb  可选回调，用于更新 UI 状态文字
- * @param timeout_ms 配网等待超时（毫秒），0 = 永久等待
- * @return true  Wi-Fi 已连接
- * @return false 超时或连接失败
+ * @param on_prov_start  进入 BLE 配网时回调（携带 qr_payload 和 dev_name）
+ * @param force_reset    true = 强制清除 NVS 凭证重新配网
  */
-static bool ble_prov_connect(void (*status_cb)(const char *) = nullptr,
-                             void (*on_prov_start)(const char *qr_payload, const char *dev_name) = nullptr,
-                             void (*tick_cb)() = nullptr,
-                             uint32_t timeout_ms = 0) {
+static void ble_prov_start(
+    void (*on_prov_start)(const char *qr_payload, const char *dev_name) = nullptr,
+    bool force_reset = false)
+{
     using namespace _ble_prov_impl;
 
-    // 1. 检测长按重置
-    if (reset_requested()) {
-        clear_credentials();
-    }
+    _on_prov_start_cb = on_prov_start;
+    _wifi_connected   = false;
+    _prov_failed      = false;
+    _prov_ended       = false;
 
-    // 2. 尝试从 NVS 读取已保存凭证
-    String saved_ssid, saved_pass;
-    if (load_credentials(saved_ssid, saved_pass)) {
-        Serial.printf("[BLE_PROV] 使用已保存凭证: %s\n", saved_ssid.c_str());
-        if (status_cb) status_cb("连接 WiFi...");
-
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(saved_ssid.c_str(), saved_pass.c_str());
-        uint32_t deadline = millis() + 15000;
-        while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
-            delay(200);
-            Serial.print(".");
-        }
-        Serial.println();
-
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[BLE_PROV] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
-            // 释放 BT 内存供 SR 任务使用
-            btStop();
-            esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
-            Serial.printf("[BLE_PROV] BT 内存已释放，当前堆: %d\n", esp_get_free_heap_size());
-            if (status_cb) status_cb("WiFi 已连接");
-            return true;
-        }
-        Serial.println("[BLE_PROV] 已保存凭证连接失败，进入配网模式");
-        clear_credentials();
-    }
-
-    // 3. 进入 BLE 配网模式
-    Serial.println("[BLE_PROV] 进入 BLE 配网模式");
-    if (status_cb) status_cb("BLE 配网中...");
-
-    // 确保 default event loop 已创建（Arduino 框架可能未创建）
-    esp_err_t err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        Serial.printf("[BLE_PROV] event loop 创建失败: 0x%x\n", err);
-        return false;
-    }
-
-    // 确保 WiFi 已初始化
+    WiFi.onEvent(wifi_event_cb);
     WiFi.mode(WIFI_STA);
 
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID, &prov_event_handler, nullptr));
+    uint8_t uuid[16] = {0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+                        0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02};
 
-    network_prov_mgr_config_t config = {
-        .scheme               = network_prov_scheme_ble,
-        .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
-    };
-    ESP_ERROR_CHECK(network_prov_mgr_init(config));
+    // beginProvision 内部检查 NVS：
+    //   有凭证且 reset=false → 直接连接，不启动 BLE
+    //   无凭证或 reset=true  → 启动 BLE 配网广播
+    WiFiProv.beginProvision(
+        NETWORK_PROV_SCHEME_BLE,
+        NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,  // 只释放 BLE 协议栈，不动 BT controller
+        NETWORK_PROV_SECURITY_1,
+        BLE_PROV_POP[0] ? BLE_PROV_POP : nullptr,
+        BLE_PROV_SERVICE_NAME,
+        nullptr,
+        uuid,
+        force_reset
+    );
+}
 
-    // 生成唯一设备名（后缀 MAC 后 3 字节）
-    uint8_t mac[6];
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
-    char dev_name[32];
-    snprintf(dev_name, sizeof(dev_name), "%s_%02X%02X%02X",
-             BLE_PROV_DEVICE_NAME, mac[3], mac[4], mac[5]);
-    Serial.printf("[BLE_PROV] 设备名: %s\n", dev_name);
-
-    if (status_cb) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "BLE: %s", dev_name);
-        status_cb(msg);
-    }
-
-    // 构造二维码 payload 并通知调用方
-    char qr_payload[128];
-    snprintf(qr_payload, sizeof(qr_payload),
-             "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"\",\"transport\":\"ble\"}",
-             dev_name);
-    Serial.printf("[BLE_PROV] QR Payload: %s\n", qr_payload);
-    if (on_prov_start) on_prov_start(qr_payload, dev_name);
-
-    // 启动配网（SECURITY_1，无 PoP）
-    ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
-        NETWORK_PROV_SECURITY_1, nullptr, dev_name, nullptr));
-
-    // 4. 等待配网完成
+/**
+ * 阻塞等待 WiFi 连接成功。
+ *
+ * @param tick_cb    等待期间持续调用（用于刷新 UI）
+ * @param timeout_ms 超时毫秒，0 = 永久等待
+ * @return true  已连接
+ * @return false 超时
+ */
+static bool ble_prov_wait_connected(void (*tick_cb)() = nullptr, uint32_t timeout_ms = 0) {
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED) {
+    while (!_ble_prov_impl::_wifi_connected) {
         delay(50);
         if (tick_cb) tick_cb();
-        Serial.print("~");
         if (timeout_ms > 0 && (millis() - start) > timeout_ms) {
-            Serial.println("\n[BLE_PROV] 配网超时！");
-            network_prov_mgr_deinit();
+            Serial.println("[BLE_PROV] 等待连接超时！");
             return false;
         }
     }
-    Serial.println();
-    Serial.printf("[BLE_PROV] 配网成功，IP: %s\n", WiFi.localIP().toString().c_str());
-
-    // 释放 BLE/BT 占用的内存，归还给堆供 SR 任务使用
-    btStop();
-    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
-    Serial.printf("[BLE_PROV] BT 内存已释放，当前堆: %d\n", esp_get_free_heap_size());
-
-    if (status_cb) status_cb("WiFi 已连接");
     return true;
 }
 
 /**
- * 清除已保存的 Wi-Fi 凭证（可在设置菜单中调用）
+ * 等待 BLE 配网流程彻底结束（PROV_END），确保 BLE 栈资源已释放。
+ * 在启动 I2S / ESP_SR 等大内存消费者之前调用。
+ *
+ * @param tick_cb    等待期间持续调用
+ * @param timeout_ms 超时毫秒
+ */
+static void ble_prov_wait_done(void (*tick_cb)() = nullptr, uint32_t timeout_ms = 10000) {
+    uint32_t start = millis();
+    while (!_ble_prov_impl::_prov_ended && (millis() - start < timeout_ms)) {
+        delay(100);
+        if (tick_cb) tick_cb();
+    }
+    if (_ble_prov_impl::_prov_ended) {
+        Serial.println("[BLE_PROV] BLE 资源已释放");
+    } else {
+        Serial.println("[BLE_PROV] 警告: PROV_END 未收到，BLE 可能仍占用内存");
+    }
+    // 额外等待让 BLE 栈完成内部清理，再启动 I2S
+    delay(500);
+    Serial.printf("[BLE_PROV] 当前堆: %d\n", ESP.getFreeHeap());
+}
+
+/**
+ * 检测长按 BOOT 按钮，返回是否需要重置配网。
+ * 在 ble_prov_start() 之前调用。
+ */
+static inline bool ble_prov_check_reset() {
+    return _ble_prov_impl::reset_requested();
+}
+
+/**
+ * 清除已保存的 Wi-Fi 凭证并重启（重启后进入配网模式）。
  */
 static inline void ble_prov_clear_credentials() {
-    _ble_prov_impl::clear_credentials();
+    Serial.println("[BLE_PROV] 清除凭证并重启...");
+    WiFi.disconnect(true, true);
+    delay(500);
+    esp_restart();
 }

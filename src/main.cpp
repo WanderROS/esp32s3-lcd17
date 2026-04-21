@@ -458,8 +458,6 @@ static void apply_cn_fonts(void) {
             Serial.println("[UI] 重置配网，清除凭证并重启...");
             ui_set_status("\xe9\x87\x8d\xe7\xbd\xae\xe9\x85\x8d\xe7\xbd\x91...");  // "重置配网..."
             ble_prov_clear_credentials();
-            delay(500);
-            esp_restart();
         }
     }, LV_EVENT_CLICKED, nullptr);
 
@@ -636,25 +634,26 @@ void setup() {
     create_ui();
 
     // 连接 WiFi（BLE 配网 或 NVS 已保存凭证）
-    // 首次使用：打开手机 "ESP BLE Provisioning" App，扫描设备名后输入 Wi-Fi 密码
+    // 首次使用：打开手机 "ESP BLE Provisioning" App，扫描二维码配网
     // 长按 BOOT 按钮 3 秒可清除凭证，重新进入配网模式
+    bool force_reset = ble_prov_check_reset();
     g_provisioning = true;
-    bool wifi_ok = ble_prov_connect(
-        // status_cb：更新状态栏文字
-        [](const char *msg) {
-            ui_set_status(msg);
-            lv_timer_handler();
-        },
+
+    ble_prov_start(
         // on_prov_start：进入 BLE 配网时显示二维码界面
         [](const char *qr_payload, const char *dev_name) {
             show_prov_qr_screen(qr_payload, dev_name);
             lv_timer_handler();
         },
-        // tick_cb：配网等待期间持续刷新 LVGL
-        []() {
-            lv_timer_handler();
-        }
+        force_reset
     );
+
+    // 等待 WiFi 连接，期间持续刷新 UI
+    bool wifi_ok = ble_prov_wait_connected([]() {
+        ui_set_status("连接 WiFi...");
+        lv_timer_handler();
+    });
+
     g_provisioning = false;
 
     // 配网/连接完成后切换到主界面（字体可能已加载完毕）
@@ -663,15 +662,19 @@ void setup() {
         Serial.println("[SETUP] 主界面切换完成");
     }
 
-    if (!wifi_ok) {
-        Serial.println("[WiFi] 配网/连接失败，继续启动（无网络功能）");
-        ui_set_status("WiFi 未连接");
+    if (wifi_ok) {
+        ui_set_status("WiFi \xe5\xb7\xb2\xe8\xbf\x9e\xe6\x8e\xa5");  // "WiFi 已连接"
+    } else {
+        Serial.println("[WiFi] 连接失败，继续启动（无网络功能）");
+        ui_set_status("WiFi \xe6\x9c\xaa\xe8\xbf\x9e\xe6\x8e\xa5");  // "WiFi 未连接"
     }
 
     Serial.printf("[MEM] 堆: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
 
+    // 等待 BLE 配网流程彻底结束（PROV_END），确保 BLE 栈资源释放后再启动 I2S
+    ble_prov_wait_done([]() { lv_timer_handler(); });
+
     // 启动音频任务（Core 1，高优先级）
-    vTaskDelay(pdMS_TO_TICKS(1000));
     xTaskCreatePinnedToCore(audio_task, "audio_task", 12288, NULL, 5, NULL, 1);
 
     Serial.println("[SETUP] 初始化完成");
