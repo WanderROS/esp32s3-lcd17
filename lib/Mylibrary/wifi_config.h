@@ -1,8 +1,9 @@
 #pragma once
 
 // ===== WiFi 配置 =====
-#define WIFI_SSID     "IOT_YF_301"
-#define WIFI_PASSWORD "znjs301in2021."
+// WiFi 凭证已改为通过 BLE Provisioning 配网，不再硬编码
+// 使用手机 App "ESP BLE Provisioning"（乐鑫官方）进行首次配网
+// 凭证保存在 NVS Flash 中，重启后自动连接
 
 // ===== 阿里云 ASR 配置 =====
 // 控制台: https://nls-portal.console.aliyun.com/

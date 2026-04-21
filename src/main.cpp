@@ -16,7 +16,8 @@
 #include <SPIFFS.h>
 
 #include "lv_fs_memfile.h" // LVGL 内存文件系统驱动
-#include "wifi_config.h"
+#include "ble_prov.h"
+#include "wifi_config.h"   // 仅保留云服务 API Key 等配置
 #include "aliyun_asr.h"
 #include "qwen_llm.h"
 #include "aliyun_tts.h"
@@ -545,22 +546,16 @@ void setup() {
     // 创建 UI
     create_ui();
 
-    // 连接 WiFi
-    Serial.printf("[WiFi] 连接 %s ...\n", WIFI_SSID);
-    ui_set_status("连接 WiFi...");
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    uint32_t wifi_timeout = millis() + 15000;
-    while (WiFi.status() != WL_CONNECTED && millis() < wifi_timeout) {
-        lv_timer_handler();
-        delay(200);
-        Serial.print(".");
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("\n[WiFi] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
-        ui_set_status("WiFi 已连接");
-    } else {
-        Serial.println("\n[WiFi] 连接失败!");
-        ui_set_status("WiFi 连接失败!");
+    // 连接 WiFi（BLE 配网 或 NVS 已保存凭证）
+    // 首次使用：打开手机 "ESP BLE Provisioning" App，扫描设备名后输入 Wi-Fi 密码
+    // 长按 BOOT 按钮 3 秒可清除凭证，重新进入配网模式
+    bool wifi_ok = ble_prov_connect([](const char *msg) {
+        ui_set_status(msg);
+        lv_timer_handler();  // 保持 UI 刷新
+    });
+    if (!wifi_ok) {
+        Serial.println("[WiFi] 配网/连接失败，继续启动（无网络功能）");
+        ui_set_status("WiFi 未连接");
     }
 
     Serial.printf("[MEM] 堆: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
