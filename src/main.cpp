@@ -435,7 +435,32 @@ static void apply_cn_fonts(void) {
     lv_label_set_text(g_lbl_hint, "\xe8\xaf\xb4 '\xe5\xb0\x8f\xe7\x88\xb1\xe5\x90\x8c\xe5\xad\xa6' \xe5\x94\xa4\xe9\x86\x92");  // "说 '小爱同学' 唤醒"
     lv_obj_set_style_text_color(g_lbl_hint, lv_color_hex(0x666688), 0);
     lv_obj_set_style_text_font(g_lbl_hint, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_14, 0);
-    lv_obj_align(g_lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_align(g_lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -55);
+
+    // 重置配网按钮（右下角）
+    lv_obj_t *btn_reset = lv_btn_create(main_scr);
+    lv_obj_set_size(btn_reset, 120, 36);
+    lv_obj_align(btn_reset, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_color(btn_reset, lv_color_hex(0x3a1a1a), 0);
+    lv_obj_set_style_bg_color(btn_reset, lv_color_hex(0x7a2020), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn_reset, lv_color_hex(0x884444), 0);
+    lv_obj_set_style_border_width(btn_reset, 1, 0);
+    lv_obj_set_style_radius(btn_reset, 8, 0);
+    lv_obj_add_event_cb(btn_reset, [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            Serial.println("[UI] 重置配网，清除凭证并重启...");
+            ui_set_status("\xe9\x87\x8d\xe7\xbd\xae\xe9\x85\x8d\xe7\xbd\x91...");  // "重置配网..."
+            ble_prov_clear_credentials();
+            delay(500);
+            esp_restart();
+        }
+    }, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *btn_lbl = lv_label_create(btn_reset);
+    lv_label_set_text(btn_lbl, "\xe9\x87\x8d\xe7\xbd\xae\xe9\x85\x8d\xe7\xbd\x91");  // "重置配网"
+    lv_obj_set_style_text_color(btn_lbl, lv_color_hex(0xff8888), 0);
+    lv_obj_set_style_text_font(btn_lbl, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_14, 0);
+    lv_obj_center(btn_lbl);
 
     // 切换到主屏幕（带淡入动画）
     lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
