@@ -14,6 +14,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
+#include <SD_MMC.h>
 
 #include "lv_fs_memfile.h" // LVGL 内存文件系统驱动
 #include "ble_prov.h"
@@ -659,6 +660,15 @@ void setup() {
         Serial.println("[SPIFFS] 初始化失败!");
     } else {
         Serial.println("[SPIFFS] 初始化成功");
+    }
+
+    // SD 卡初始化（瓦片地图缓存）
+    SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+    if (!SD_MMC.begin("/sdcard", true)) {  // true = 1-bit 模式，更稳定
+        Serial.println("[SD] 初始化失败，地图瓦片将不缓存");
+    } else {
+        Serial.printf("[SD] 初始化成功，卡类型: %d，容量: %llu MB\n",
+                      SD_MMC.cardType(), SD_MMC.cardSize() / (1024 * 1024));
     }
 
     // 触摸初始化
