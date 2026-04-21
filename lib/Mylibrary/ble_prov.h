@@ -132,6 +132,8 @@ static void prov_event_handler(void *arg, esp_event_base_t base,
  * @return false 超时或连接失败
  */
 static bool ble_prov_connect(void (*status_cb)(const char *) = nullptr,
+                             void (*on_prov_start)(const char *qr_payload, const char *dev_name) = nullptr,
+                             void (*tick_cb)() = nullptr,
                              uint32_t timeout_ms = 0) {
     using namespace _ble_prov_impl;
 
@@ -205,16 +207,13 @@ static bool ble_prov_connect(void (*status_cb)(const char *) = nullptr,
         status_cb(msg);
     }
 
-    // 打印二维码（用 ESP BLE Provisioning App 扫描）
-    // 格式: {"ver":"v1","name":"<设备名>","pop":"","transport":"ble"}
+    // 构造二维码 payload 并通知调用方
     char qr_payload[128];
     snprintf(qr_payload, sizeof(qr_payload),
              "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"\",\"transport\":\"ble\"}",
              dev_name);
-    Serial.println("[BLE_PROV] 使用 ESP BLE Provisioning App 扫描以下二维码配网:");
     Serial.printf("[BLE_PROV] QR Payload: %s\n", qr_payload);
-    // 生成文本二维码（需要 esp_qrcode 组件，此处打印链接替代）
-    Serial.printf("[BLE_PROV] 或在 App 中手动输入设备名: %s\n", dev_name);
+    if (on_prov_start) on_prov_start(qr_payload, dev_name);
 
     // 启动配网（SECURITY_1，无 PoP）
     ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
@@ -223,7 +222,8 @@ static bool ble_prov_connect(void (*status_cb)(const char *) = nullptr,
     // 4. 等待配网完成
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
+        delay(50);
+        if (tick_cb) tick_cb();
         Serial.print("~");
         if (timeout_ms > 0 && (millis() - start) > timeout_ms) {
             Serial.println("\n[BLE_PROV] 配网超时！");

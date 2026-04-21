@@ -36,6 +36,7 @@ enum VoiceState {
 
 static volatile VoiceState voice_state = STATE_IDLE;
 static volatile bool wake_detected = false;
+static volatile bool g_provisioning = false;  // 配网进行中，延迟主界面切换
 
 // ===== 音频配置 =====
 #define EXAMPLE_SAMPLE_RATE     16000
@@ -374,6 +375,12 @@ static lv_obj_t *g_lbl_title       = nullptr;
 static lv_obj_t *g_lbl_asr_title   = nullptr;
 static lv_obj_t *g_lbl_reply_title = nullptr;
 static lv_obj_t *g_lbl_hint        = nullptr;
+static lv_obj_t *g_main_scr        = nullptr;  // 主界面屏幕对象（配网时延迟切换）
+
+// 配网界面标签引用（字体加载完后更新）
+static lv_obj_t *g_prov_lbl_title = nullptr;
+static lv_obj_t *g_prov_lbl_hint  = nullptr;
+static lv_obj_t *g_prov_lbl_name  = nullptr;
 
 static const lv_font_t *cn_font(lv_font_t *cn, const lv_font_t *fallback) {
     return cn ? cn : fallback;
@@ -463,8 +470,23 @@ static void apply_cn_fonts(void) {
     lv_obj_center(btn_lbl);
 
     // 切换到主屏幕（带淡入动画）
-    lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
-    Serial.println("[FONT] 主界面已显示");
+    // 若配网仍在进行，先保存引用，等配网完成后再切换
+    g_main_scr = main_scr;
+
+    // 若配网界面正在显示，更新其字体
+    if (g_prov_lbl_title)
+        lv_obj_set_style_text_font(g_prov_lbl_title, cn_font(g_font_cn_24, &lv_font_montserrat_24), 0);
+    if (g_prov_lbl_hint)
+        lv_obj_set_style_text_font(g_prov_lbl_hint,  cn_font(g_font_cn_16, &lv_font_montserrat_14), 0);
+    if (g_prov_lbl_name)
+        lv_obj_set_style_text_font(g_prov_lbl_name,  cn_font(g_font_cn_20, &lv_font_montserrat_18), 0);
+
+    if (!g_provisioning) {
+        lv_scr_load_anim(main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
+        Serial.println("[FONT] 主界面已显示");
+    } else {
+        Serial.println("[FONT] 主界面已就绪，等待配网完成后切换");
+    }
 }
 
 // 后台字体加载任务（Core 0，低优先级，不阻塞 UI）
@@ -481,6 +503,48 @@ static void font_load_task(void *param) {
     }, 10, nullptr);
     (void)tmr;
     vTaskDelete(NULL);
+}
+
+// ===== 配网二维码界面 =====
+// 在 BLE 配网启动后调用，显示二维码和设备名
+static void show_prov_qr_screen(const char *qr_payload, const char *dev_name) {
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
+
+    // 标题 "BLE 配网"
+    g_prov_lbl_title = lv_label_create(scr);
+    lv_label_set_text(g_prov_lbl_title, "BLE \xe9\x85\x8d\xe7\xbd\x91");
+    lv_obj_set_style_text_color(g_prov_lbl_title, lv_color_hex(0x00d4ff), 0);
+    lv_obj_set_style_text_font(g_prov_lbl_title,
+        cn_font(g_font_cn_24, &lv_font_montserrat_24), 0);
+    lv_obj_align(g_prov_lbl_title, LV_ALIGN_TOP_MID, 0, 18);
+
+    // 二维码控件（白底黑码，200x200）
+    lv_obj_t *qr = lv_qrcode_create(scr, 200, lv_color_hex(0x000000), lv_color_hex(0xffffff));
+    lv_qrcode_update(qr, qr_payload, strlen(qr_payload));
+    lv_obj_align(qr, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_style_border_color(qr, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_border_width(qr, 6, 0);
+
+    // 提示文字 "扫码配网"
+    g_prov_lbl_hint = lv_label_create(scr);
+    lv_label_set_text(g_prov_lbl_hint,
+        "ESP BLE Provisioning App \xe6\x89\xab\xe7\xa0\x81\xe9\x85\x8d\xe7\xbd\x91");
+    lv_obj_set_style_text_color(g_prov_lbl_hint, lv_color_hex(0xaaaacc), 0);
+    lv_obj_set_style_text_font(g_prov_lbl_hint,
+        cn_font(g_font_cn_16, &lv_font_montserrat_14), 0);
+    lv_obj_align(g_prov_lbl_hint, LV_ALIGN_BOTTOM_MID, 0, -40);
+
+    // 设备名
+    g_prov_lbl_name = lv_label_create(scr);
+    lv_label_set_text(g_prov_lbl_name, dev_name);
+    lv_obj_set_style_text_color(g_prov_lbl_name, lv_color_hex(0xffd700), 0);
+    lv_obj_set_style_text_font(g_prov_lbl_name,
+        cn_font(g_font_cn_20, &lv_font_montserrat_18), 0);
+    lv_obj_align(g_prov_lbl_name, LV_ALIGN_BOTTOM_MID, 0, -16);
+
+    lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, true);
+    Serial.println("[UI] 配网二维码界面已显示");
 }
 
 static void create_ui(void) {
@@ -574,10 +638,31 @@ void setup() {
     // 连接 WiFi（BLE 配网 或 NVS 已保存凭证）
     // 首次使用：打开手机 "ESP BLE Provisioning" App，扫描设备名后输入 Wi-Fi 密码
     // 长按 BOOT 按钮 3 秒可清除凭证，重新进入配网模式
-    bool wifi_ok = ble_prov_connect([](const char *msg) {
-        ui_set_status(msg);
-        lv_timer_handler();  // 保持 UI 刷新
-    });
+    g_provisioning = true;
+    bool wifi_ok = ble_prov_connect(
+        // status_cb：更新状态栏文字
+        [](const char *msg) {
+            ui_set_status(msg);
+            lv_timer_handler();
+        },
+        // on_prov_start：进入 BLE 配网时显示二维码界面
+        [](const char *qr_payload, const char *dev_name) {
+            show_prov_qr_screen(qr_payload, dev_name);
+            lv_timer_handler();
+        },
+        // tick_cb：配网等待期间持续刷新 LVGL
+        []() {
+            lv_timer_handler();
+        }
+    );
+    g_provisioning = false;
+
+    // 配网/连接完成后切换到主界面（字体可能已加载完毕）
+    if (g_main_scr) {
+        lv_scr_load_anim(g_main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
+        Serial.println("[SETUP] 主界面切换完成");
+    }
+
     if (!wifi_ok) {
         Serial.println("[WiFi] 配网/连接失败，继续启动（无网络功能）");
         ui_set_status("WiFi 未连接");
