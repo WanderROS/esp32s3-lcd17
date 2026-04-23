@@ -22,6 +22,9 @@
 #define MAP_CANVAS_W  (TILE_SIZE * 3)   // 768
 #define MAP_CANVAS_H  (TILE_SIZE * 3)   // 768
 
+// ── 轨迹最大点数 ──────────────────────────────────────────
+#define TRACK_MAX_POINTS 512
+
 // ── JPEG 解码回调上下文 ───────────────────────────────────
 // TJpgDec 解码时逐行回调，我们把 RGB565 写入 canvas 缓冲区
 static lv_color_t *s_canvas_buf = nullptr;
@@ -67,6 +70,11 @@ public:
     int    _zoom = MAP_ZOOM_DEFAULT;
 
     bool _needsUpdate = false;  // 标记需要刷新地图
+
+    // ── 轨迹记录 ──────────────────────────────────────────
+    struct TrackPoint { double lat, lon; };
+    TrackPoint _track[TRACK_MAX_POINTS];
+    int _trackCount = 0;
 
     // ── 初始化 ────────────────────────────────────────────
     void begin(lv_obj_t *parent) {
@@ -147,6 +155,14 @@ public:
         if (fabs(lat - _lat) > 0.00001 || fabs(lon - _lon) > 0.00001) {
             _lat = lat;
             _lon = lon;
+            // 追加轨迹点
+            if (_trackCount < TRACK_MAX_POINTS) {
+                _track[_trackCount++] = {lat, lon};
+            } else {
+                // 环形覆盖：丢弃最旧的点
+                memmove(_track, _track + 1, (TRACK_MAX_POINTS - 1) * sizeof(TrackPoint));
+                _track[TRACK_MAX_POINTS - 1] = {lat, lon};
+            }
             _needsUpdate = true;
         }
     }
@@ -208,6 +224,8 @@ private:
                 }
             }
         }
+        // 瓦片加载完后叠加轨迹
+        _drawTrack();
     }
 
     // 解码 JPEG 并写入 canvas 指定位置
@@ -224,6 +242,77 @@ private:
             for (int col = x; col < x + w && col < MAP_CANVAS_W; col++) {
                 s_canvas_buf[row * MAP_CANVAS_W + col] = color;
             }
+        }
+    }
+
+    // 将经纬度转换为 canvas 像素坐标（以当前中心瓦片为参考）
+    bool _geoToCanvas(double lat, double lon, int &cx, int &cy) {
+        double n = pow(2.0, _zoom);
+        double fx = (lon + 180.0) / 360.0 * n;
+        double lat_r = lat * M_PI / 180.0;
+        double fy = (1.0 - log(tan(lat_r) + 1.0 / cos(lat_r)) / M_PI) / 2.0 * n;
+
+        TileXY center = latLonToTile(_lat, _lon, _zoom);
+        // canvas 左上角对应的瓦片坐标（浮点）
+        double canvas_fx0 = center.x - 1.0;
+        double canvas_fy0 = center.y - 1.0;
+
+        cx = (int)((fx - canvas_fx0) * TILE_SIZE);
+        cy = (int)((fy - canvas_fy0) * TILE_SIZE);
+        return (cx >= 0 && cx < MAP_CANVAS_W && cy >= 0 && cy < MAP_CANVAS_H);
+    }
+
+    // 在 canvas 缓冲区画一个粗点（3×3 像素）
+    void _drawDot(int cx, int cy, lv_color_t color, int radius = 2) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx*dx + dy*dy <= radius*radius) {
+                    int px = cx + dx, py = cy + dy;
+                    if (px >= 0 && px < MAP_CANVAS_W && py >= 0 && py < MAP_CANVAS_H)
+                        s_canvas_buf[py * MAP_CANVAS_W + px] = color;
+                }
+            }
+        }
+    }
+
+    // Bresenham 直线，在 canvas 缓冲区画线
+    void _drawLine(int x0, int y0, int x1, int y1, lv_color_t color, int thickness = 3) {
+        int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+        int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+        int err = dx + dy;
+        while (true) {
+            _drawDot(x0, y0, color, thickness / 2);
+            if (x0 == x1 && y0 == y1) break;
+            int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+    }
+
+    // 绘制历史轨迹到 canvas 缓冲区
+    void _drawTrack() {
+        if (_trackCount < 2) return;
+
+        // 轨迹线颜色：亮蓝色
+        lv_color_t track_color = lv_color_make(0x00, 0xaa, 0xff);
+        // 起点颜色：绿色
+        lv_color_t start_color = lv_color_make(0x00, 0xdd, 0x44);
+
+        int px0, py0, px1, py1;
+        bool valid0 = _geoToCanvas(_track[0].lat, _track[0].lon, px0, py0);
+
+        for (int i = 1; i < _trackCount; i++) {
+            bool valid1 = _geoToCanvas(_track[i].lat, _track[i].lon, px1, py1);
+            if (valid0 && valid1) {
+                _drawLine(px0, py0, px1, py1, track_color, 3);
+            }
+            px0 = px1; py0 = py1; valid0 = valid1;
+        }
+
+        // 起点绿色圆点
+        int spx, spy;
+        if (_geoToCanvas(_track[0].lat, _track[0].lon, spx, spy)) {
+            _drawDot(spx, spy, start_color, 5);
         }
     }
 

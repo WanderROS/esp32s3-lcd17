@@ -23,6 +23,37 @@
 #include "qwen_llm.h"
 #include "aliyun_tts.h"
 #include "map_screen.h"    // 地图界面
+#include "ramviewer.h"     // RAMViewer 内存观测
+
+// ===== 调试串口（UART0，TX=43/RX=44，与 USB-CDC Serial 独立）=====
+// 同时承载：RAMViewer 二进制协议 + 串口日志打印
+#define DBG_SERIAL  Serial0
+#define DBG_BAUD    115200
+
+// RAMViewer 当前活跃串口（哪个串口收到帧就用哪个回复）
+static Stream *rv_active_port = nullptr;
+
+// RAMViewer TX 回调：向活跃串口发送字节
+// Arduino Serial.write() 是阻塞式，没有"发送完成中断"
+// 所以这里每次回调直接发字节，并立即驱动下一字节（pump loop）
+static void rv_uart_send(uint8_t byte) {
+    if (rv_active_port) rv_active_port->write(byte);
+}
+
+// 在 loop 里调用，把 rv_tx_buffer 剩余字节全部泵出
+static inline void rv_pump_tx() {
+    while (rv_is_tx_busy()) {
+        rv_tx_complete();   // 触发发送下一字节（调用 rv_uart_send）
+    }
+}
+
+// 日志宏：同时输出到 USB-CDC Serial 和调试串口 Serial0
+#define LOG(...)  do { Serial.printf(__VA_ARGS__); DBG_SERIAL.printf(__VA_ARGS__); } while(0)
+#define LOGLN(s)  do { Serial.println(s);          DBG_SERIAL.println(s); } while(0)
+
+// ===== RAMViewer 测试变量（sin 波形，供内存监控观测）=====
+volatile float   g_rv_sin_f = 0.0f;  // float，[-1.0, 1.0]
+volatile int32_t g_rv_sin_i = 0;     // int32，[-1000, 1000]，放大 1000 倍
 
 // ===== 唤醒词命令（保留用于触发录音） =====
 static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒词
@@ -31,18 +62,58 @@ static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒�
 static MapScreen g_map;
 static bool g_map_visible = false;  // 当前是否显示地图界面
 
-// 模拟 GPS 路径（北京市区，每步约 50 米）
+// 模拟 GPS 路径（北京市区骑行，每步约 50 米，模拟骑行速度 ~12km/h）
 static const double SIM_GPS_PATH[][2] = {
-    {39.9042, 116.4074},  // 天安门
-    {39.9055, 116.4100},
-    {39.9068, 116.4130},
-    {39.9080, 116.4160},
-    {39.9095, 116.4190},
+    {39.9042, 116.4074},  // 天安门广场
+    {39.9050, 116.4090},
+    {39.9058, 116.4108},
+    {39.9065, 116.4128},
+    {39.9072, 116.4150},
+    {39.9080, 116.4170},
+    {39.9090, 116.4188},
+    {39.9102, 116.4202},
+    {39.9115, 116.4215},
+    {39.9128, 116.4225},
+    {39.9140, 116.4232},
+    {39.9150, 116.4240},
+    {39.9158, 116.4252},
+    {39.9165, 116.4268},
+    {39.9170, 116.4285},
+    {39.9172, 116.4305},
+    {39.9170, 116.4325},
+    {39.9165, 116.4342},
+    {39.9158, 116.4358},
+    {39.9150, 116.4372},
+    {39.9140, 116.4382},
+    {39.9128, 116.4390},
+    {39.9115, 116.4395},
+    {39.9102, 116.4398},
+    {39.9090, 116.4395},
+    {39.9080, 116.4388},
+    {39.9072, 116.4378},
+    {39.9065, 116.4365},
+    {39.9060, 116.4350},
+    {39.9058, 116.4332},
+    {39.9058, 116.4312},
+    {39.9060, 116.4292},
+    {39.9065, 116.4275},
+    {39.9072, 116.4260},
+    {39.9080, 116.4248},
+    {39.9090, 116.4238},
+    {39.9100, 116.4230},
     {39.9110, 116.4220},
-    {39.9125, 116.4250},
-    {39.9140, 116.4280},
-    {39.9155, 116.4310},
-    {39.9170, 116.4340},
+    {39.9118, 116.4208},
+    {39.9122, 116.4192},
+    {39.9120, 116.4175},
+    {39.9115, 116.4160},
+    {39.9108, 116.4148},
+    {39.9098, 116.4138},
+    {39.9088, 116.4130},
+    {39.9078, 116.4125},
+    {39.9068, 116.4122},
+    {39.9058, 116.4120},
+    {39.9050, 116.4118},
+    {39.9042, 116.4074},  // 回到起点（天安门）
 };
 static const int SIM_GPS_COUNT = sizeof(SIM_GPS_PATH) / sizeof(SIM_GPS_PATH[0]);
 static int s_sim_gps_idx = 0;
@@ -504,6 +575,8 @@ static void apply_cn_fonts(void) {
             lv_obj_t *map_scr = lv_obj_create(NULL);
             lv_obj_set_style_bg_color(map_scr, lv_color_hex(0x1a1a2e), 0);
             g_map.begin(map_scr);
+            // 把当前起始位置加入轨迹
+            g_map.setPosition(SIM_GPS_PATH[0][0], SIM_GPS_PATH[0][1]);
             g_map.forceUpdate();
             g_map_visible = true;
 
@@ -648,8 +721,15 @@ static void map_update_task(void *param) {
 
 // ===== setup =====
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(115200);       // USB-CDC（开发调试用）
+    DBG_SERIAL.begin(DBG_BAUD); // UART0 调试串口（RAMViewer + 日志）
     delay(2000);
+
+    // 初始化 RAMViewer（绑定 UART0 发送回调）
+    rv_init(rv_uart_send);
+    LOG("[RV] RAMViewer v%s 已初始化，波特率 %d\n", rv_get_version(), DBG_BAUD);
+    LOG("[RV] g_rv_sin_f  addr=0x%08X size=%d\n", (uint32_t)&g_rv_sin_f,  sizeof(g_rv_sin_f));
+    LOG("[RV] g_rv_sin_i  addr=0x%08X size=%d\n", (uint32_t)&g_rv_sin_i,  sizeof(g_rv_sin_i));
 
     // 功放使能
     pinMode(PA, OUTPUT);
@@ -657,17 +737,17 @@ void setup() {
 
     // SPIFFS 初始化（字体文件存储在 Flash）
     if (!SPIFFS.begin(true)) {
-        Serial.println("[SPIFFS] 初始化失败!");
+        LOGLN("[SPIFFS] 初始化失败!");
     } else {
-        Serial.println("[SPIFFS] 初始化成功");
+        LOGLN("[SPIFFS] 初始化成功");
     }
 
     // SD 卡初始化（瓦片地图缓存）
     SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
     if (!SD_MMC.begin("/sdcard", true)) {  // true = 1-bit 模式，更稳定
-        Serial.println("[SD] 初始化失败，地图瓦片将不缓存");
+        LOGLN("[SD] 初始化失败，地图瓦片将不缓存");
     } else {
-        Serial.printf("[SD] 初始化成功，卡类型: %d，容量: %llu MB\n",
+        LOG("[SD] 初始化成功，卡类型: %d，容量: %llu MB\n",
                       SD_MMC.cardType(), SD_MMC.cardSize() / (1024 * 1024));
     }
 
@@ -748,17 +828,17 @@ void setup() {
     // 配网/连接完成后切换到主界面（字体可能已加载完毕）
     if (g_main_scr) {
         lv_scr_load_anim(g_main_scr, LV_SCR_LOAD_ANIM_FADE_ON, 300, 0, true);
-        Serial.println("[SETUP] 主界面切换完成");
+        LOGLN("[SETUP] 主界面切换完成");
     }
 
     if (wifi_ok) {
         ui_set_status("WiFi \xe5\xb7\xb2\xe8\xbf\x9e\xe6\x8e\xa5");  // "WiFi 已连接"
     } else {
-        Serial.println("[WiFi] 连接失败，继续启动（无网络功能）");
+        LOGLN("[WiFi] 连接失败，继续启动（无网络功能）");
         ui_set_status("WiFi \xe6\x9c\xaa\xe8\xbf\x9e\xe6\x8e\xa5");  // "WiFi 未连接"
     }
 
-    Serial.printf("[MEM] 堆: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+    LOG("[MEM] 堆: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
 
     // 等待 BLE 配网流程彻底结束（PROV_END），确保 BLE 栈资源释放后再启动 I2S
     ble_prov_wait_done([]() { lv_timer_handler(); });
@@ -769,13 +849,38 @@ void setup() {
     // 启动地图更新任务（Core 0，低优先级，负责 HTTP 下载瓦片）
     xTaskCreatePinnedToCore(map_update_task, "map_update", 8192, NULL, 1, NULL, 0);
 
-    Serial.println("[SETUP] 初始化完成");
+    LOGLN("[SETUP] 初始化完成");
 }
 
 // ===== loop（Core 0，运行 LVGL）=====
 
 void loop() {
+    // RAMViewer：轮询两个串口 RX，哪个有数据就用哪个回复
+    // USB CDC (Serial) — 方便开发时直接用 USB 线测试
+    if (Serial.available()) {
+        rv_active_port = &Serial;
+        while (Serial.available()) rv_rx_byte((uint8_t)Serial.read());
+        rv_pump_tx();
+    }
+    // UART0 (Serial0) — 调试串口，RAMViewer 插件连这里
+    if (DBG_SERIAL.available()) {
+        rv_active_port = &DBG_SERIAL;
+        while (DBG_SERIAL.available()) rv_rx_byte((uint8_t)DBG_SERIAL.read());
+        rv_pump_tx();
+    }
+
     lv_timer_handler();
+
+    // sin 波形更新（周期 2 秒，每 20ms 一步）
+    static uint32_t lastSinTick = 0;
+    static float s_sin_phase = 0.0f;
+    if (millis() - lastSinTick >= 20) {
+        lastSinTick = millis();
+        s_sin_phase += 0.0628f;          // 2π / 100 步 ≈ 2s 周期
+        if (s_sin_phase > 6.2832f) s_sin_phase -= 6.2832f;
+        g_rv_sin_f = sinf(s_sin_phase);
+        g_rv_sin_i = (int32_t)(g_rv_sin_f * 1000.0f);
+    }
 
     // 模拟 GPS：每 4 秒移动一步，仅在地图界面可见时更新
     static uint32_t lastGpsTick = 0;
