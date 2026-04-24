@@ -19,6 +19,7 @@
 #include <TJpg_Decoder.h>
 #include "tile_map.h"
 #include "pin_config.h"
+#include "SensorQMI8658.hpp"
 
 // ── Canvas 尺寸（3×3 瓦片）────────────────────────────────
 #define MAP_CANVAS_W  (TILE_SIZE * 3)   // 768
@@ -75,6 +76,13 @@ public:
     int  _canvas_x = 0;         // canvas 在屏幕上的位置（每次刷新后更新）
     int  _canvas_y = 0;
 
+    // ── IMU / 航向角 ──────────────────────────────────────
+    SensorQMI8658 _imu;
+    bool   _imuReady    = false;
+    float  _heading     = 0.0f;   // 当前航向角（度，顺时针为正，北=0）
+    uint32_t _lastImuMs = 0;
+    lv_color_t *_arrow_buf = nullptr;  // 箭头 canvas buffer
+
     // ── 轨迹数据 ──────────────────────────────────────────
     struct TrackPoint { double lat, lon; };
     TrackPoint _track[TRACK_MAX_POINTS];
@@ -114,17 +122,10 @@ public:
         lv_obj_set_size(canvas, MAP_CANVAS_W, MAP_CANVAS_H);
         lv_obj_set_pos(canvas, 0, 0);  // 初始位置，forceUpdate 会修正
 
-        // 位置标记（红圆点，始终固定在屏幕正中心）
-        marker = lv_obj_create(screen);
-        lv_obj_set_size(marker, 18, 18);
-        lv_obj_set_style_radius(marker, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(marker, lv_color_make(220, 50, 50), 0);
-        lv_obj_set_style_border_color(marker, lv_color_white(), 0);
-        lv_obj_set_style_border_width(marker, 2, 0);
-        lv_obj_set_style_shadow_width(marker, 8, 0);
-        lv_obj_set_style_shadow_color(marker, lv_color_make(220, 50, 50), 0);
-        lv_obj_center(marker);  // 永远居中，不动
-
+        // 位置标记：箭头直接画在地图 canvas buf 上，无背景遮挡
+        // 见 _drawArrowOnMap()，在每次 _loadTiles 时调用
+        marker = nullptr;
+        _arrow_buf = nullptr;
         // 信息栏（底部）
         info_lbl = lv_label_create(screen);
         lv_obj_set_style_bg_color(info_lbl, lv_color_hex(0x000000), 0);
@@ -150,6 +151,19 @@ public:
             });
 
         Serial.println("[MAP] 地图界面初始化完成");
+
+        // ── IMU 初始化（QMI8658，共用 Wire） ──────────────
+        if (_imu.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+            _imu.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS,
+                                 SensorQMI8658::GYR_ODR_112_1Hz,
+                                 SensorQMI8658::LPF_MODE_2);
+            _imu.enableGyroscope();
+            _imuReady = true;
+            _lastImuMs = millis();
+            Serial.println("[MAP] QMI8658 初始化成功");
+        } else {
+            Serial.println("[MAP] QMI8658 初始化失败，地图旋转不可用");
+        }
     }
 
     // ── 设置坐标（模拟 GPS 或真实 GPS 调用）────────────────
@@ -177,6 +191,45 @@ public:
     void clearTrack() {
         _trackCount = 0;
     }
+
+    // ── 更新 IMU 航向角（在 loop 中频繁调用）──────────────
+    void updateIMU() {
+        if (!_imuReady) return;
+        uint32_t now = millis();
+        float dt = (now - _lastImuMs) / 1000.0f;
+        _lastImuMs = now;
+        if (dt <= 0 || dt > 0.5f) return;
+
+        float gx, gy, gz;
+        if (_imu.getGyroscope(gx, gy, gz)) {
+            float prev = _heading;
+            _heading += gz * dt;
+            while (_heading >= 360.0f) _heading -= 360.0f;
+            while (_heading <    0.0f) _heading += 360.0f;
+            // 角度变化超过 0.5° 才触发重绘
+            if (fabsf(_heading - prev) > 0.5f) {
+                _needsUpdate = true;
+            }
+        }
+    }
+
+    // ── 获取当前航向角（度）──────────────────────────────
+    float getHeading() const { return _heading; }
+
+    // ── 直接设置航向角（由 GPS 轨迹方位角驱动）──────────
+    void setHeading(float deg) {
+        while (deg >= 360.0f) deg -= 360.0f;
+        while (deg <    0.0f) deg += 360.0f;
+        if (fabsf(deg - _heading) > 0.5f) {
+            _heading = deg;
+            if (marker) {
+                _drawArrowOnMap();  // 下次 _loadTiles 时会重画，这里只更新角度
+            }
+        }
+    }
+
+    // ── 重置航向角为 0 ────────────────────────────────────
+    void resetHeading() { _heading = 0.0f; }
 
     // ── 刷新地图（在后台任务中调用）──────────────────────────
     // 下载瓦片写入 canvas buf（纯内存操作，线程安全）
@@ -260,6 +313,9 @@ private:
 
         // 叠加轨迹
         _drawTrack();
+
+        // 在 GPS 锚点画朝向箭头（直接写入 canvas buf，无背景遮挡）
+        _drawArrowOnMap();
     }
 
     // ── 将经纬度转换为 canvas 像素坐标 ──────────────────────
@@ -284,7 +340,79 @@ private:
                 cy >= -TILE_SIZE && cy < MAP_CANVAS_H + TILE_SIZE);
     }
 
-    // ── 在 canvas buf 上画一条抗锯齿线段（Bresenham）────────
+    // ── 在地图 canvas buf 上画朝向箭头（无背景，直接覆盖地图像素）──
+    // GPS 锚点为箭头中心，angle_deg 顺时针，0° 尖端朝上
+    void _drawArrowOnMap() {
+        // GPS 锚点在 canvas 内的坐标
+        int ax = (int)(LCD_WIDTH  / 2 - _canvas_x);
+        int ay = (int)(LCD_HEIGHT / 2 - _canvas_y);
+
+        float rad = _heading * M_PI / 180.0f;
+        float cos_a = cosf(rad);
+        float sin_a = sinf(rad);
+
+        // 导航箭头顶点（本地坐标，0° 时尖端朝上）
+        // 形状：尖头 + 两侧翼 + 尾部凹口
+        const int N = 5;
+        float local[N][2] = {
+            {  0,  -20 },   // 0: 尖端（朝向方向）
+            { -12,  12 },   // 1: 左翼尾
+            {  0,    4 },   // 2: 尾部凹口
+            {  12,  12 },   // 3: 右翼尾
+            {  0,  -20 },   // 4: 闭合
+        };
+
+        // 旋转到 canvas 坐标
+        int pts[N][2];
+        for (int i = 0; i < N; i++) {
+            float lx = local[i][0], ly = local[i][1];
+            pts[i][0] = ax + (int)(cos_a * lx - sin_a * ly + 0.5f);
+            pts[i][1] = ay + (int)(sin_a * lx + cos_a * ly + 0.5f);
+        }
+
+        // 扫描线填充（蓝色主体）
+        lv_color_t fill = lv_color_make(30, 160, 255);
+        int y_min = MAP_CANVAS_H, y_max = 0;
+        for (int i = 0; i < N - 1; i++) {
+            if (pts[i][1] < y_min) y_min = pts[i][1];
+            if (pts[i][1] > y_max) y_max = pts[i][1];
+        }
+        y_min = (y_min < 0) ? 0 : y_min;
+        y_max = (y_max >= MAP_CANVAS_H) ? MAP_CANVAS_H - 1 : y_max;
+
+        for (int y = y_min; y <= y_max; y++) {
+            int x_left = MAP_CANVAS_W, x_right = -1;
+            for (int i = 0; i < N - 1; i++) {
+                int x0 = pts[i][0],   y0 = pts[i][1];
+                int x1 = pts[i+1][0], y1 = pts[i+1][1];
+                if ((y0 <= y && y < y1) || (y1 <= y && y < y0)) {
+                    int xi = x0 + (x1 - x0) * (y - y0) / (y1 - y0);
+                    if (xi < x_left)  x_left  = xi;
+                    if (xi > x_right) x_right = xi;
+                }
+            }
+            for (int x = x_left; x <= x_right; x++) {
+                if (x >= 0 && x < MAP_CANVAS_W)
+                    s_canvas_buf[y * MAP_CANVAS_W + x] = fill;
+            }
+        }
+
+        // 白色描边
+        lv_color_t edge = lv_color_make(255, 255, 255);
+        for (int i = 0; i < N - 1; i++) {
+            _drawLine(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1], edge, 2);
+        }
+
+        // 尖端白色高亮点（强调朝向）
+        int tx = pts[0][0], ty = pts[0][1];
+        for (int dy = -2; dy <= 2; dy++)
+            for (int dx = -2; dx <= 2; dx++)
+                if (dx*dx + dy*dy <= 5) {
+                    int px = tx+dx, py = ty+dy;
+                    if (px >= 0 && px < MAP_CANVAS_W && py >= 0 && py < MAP_CANVAS_H)
+                        s_canvas_buf[py * MAP_CANVAS_W + px] = lv_color_make(255, 255, 255);
+                }
+    }
     void _drawLine(int x0, int y0, int x1, int y1, lv_color_t color, int thickness = 3) {
         int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
         int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;

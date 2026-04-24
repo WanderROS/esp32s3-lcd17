@@ -23,6 +23,7 @@
 #include "qwen_llm.h"
 #include "aliyun_tts.h"
 #include "map_screen.h"    // 地图界面
+#include "gpx_track.h"     // 无锡骑行 GPX 轨迹
 
 // ===== 唤醒词命令（保留用于触发录音） =====
 static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒词
@@ -31,23 +32,7 @@ static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒�
 static MapScreen g_map;
 static bool g_map_visible = false;  // 当前是否显示地图界面
 
-// 模拟 GPS 路径（北京天安门附近，矩形轨迹，每步约 100 米）
-static const double SIM_GPS_PATH[][2] = {
-    {39.9042, 116.4074},  // 起点（西南角）
-    {39.9042, 116.4110},  // → 东
-    {39.9042, 116.4146},  // → 东
-    {39.9042, 116.4182},  // → 东（东南角）
-    {39.9060, 116.4182},  // ↑ 北
-    {39.9078, 116.4182},  // ↑ 北
-    {39.9096, 116.4182},  // ↑ 北（东北角）
-    {39.9096, 116.4146},  // ← 西
-    {39.9096, 116.4110},  // ← 西
-    {39.9096, 116.4074},  // ← 西（西北角）
-    {39.9078, 116.4074},  // ↓ 南
-    {39.9060, 116.4074},  // ↓ 南
-    {39.9042, 116.4074},  // ↓ 南（回到起点）
-};
-static const int SIM_GPS_COUNT = sizeof(SIM_GPS_PATH) / sizeof(SIM_GPS_PATH[0]);
+// GPX 模拟骑行：使用无锡公路骑行轨迹
 static int s_sim_gps_idx = 0;
 
 // ===== 状态机 =====
@@ -780,15 +765,37 @@ void setup() {
 void loop() {
     lv_timer_handler();
 
-    // 模拟 GPS：每 4 秒移动一步，仅在地图界面可见时更新
+    // IMU 航向角更新（地图可见时持续积分）
+    if (g_map_visible) {
+        g_map.updateIMU();
+    }
+
+    // GPX 骑行模拟：每 1 秒推进一个采样点（原始 3 秒间隔，3 倍速回放）
+    // 到达终点后停止（不循环，模拟真实骑行结束）
     static uint32_t lastGpsTick = 0;
-    if (g_map_visible && millis() - lastGpsTick > 4000) {
+    if (g_map_visible && s_sim_gps_idx < GPX_TRACK_COUNT
+        && millis() - lastGpsTick > 1000) {
         lastGpsTick = millis();
-        double lat = SIM_GPS_PATH[s_sim_gps_idx][0];
-        double lon = SIM_GPS_PATH[s_sim_gps_idx][1];
-        s_sim_gps_idx = (s_sim_gps_idx + 1) % SIM_GPS_COUNT;
-        Serial.printf("[GPS-SIM] lat=%.5f lon=%.5f\n", lat, lon);
-        g_map.addTrackPoint(lat, lon);  // 记录轨迹点并更新地图中心
+
+        double lat = GPX_TRACK[s_sim_gps_idx][0];
+        double lon = GPX_TRACK[s_sim_gps_idx][1];
+
+        // 根据相邻两点计算行进方向，更新箭头朝向
+        if (s_sim_gps_idx + 1 < GPX_TRACK_COUNT) {
+            double nlat = GPX_TRACK[s_sim_gps_idx + 1][0];
+            double nlon = GPX_TRACK[s_sim_gps_idx + 1][1];
+            // 方位角：atan2(dlon, dlat)，北=0，顺时针为正
+            double dlat = nlat - lat;
+            double dlon = nlon - lon;
+            float bearing = (float)(atan2(dlon, dlat) * 180.0 / M_PI);
+            if (bearing < 0) bearing += 360.0f;
+            g_map.setHeading(bearing);
+        }
+
+        Serial.printf("[GPX] %d/%d lat=%.6f lon=%.6f\n",
+                      s_sim_gps_idx + 1, GPX_TRACK_COUNT, lat, lon);
+        g_map.addTrackPoint(lat, lon);
+        s_sim_gps_idx++;
     }
 
     delay(5);
