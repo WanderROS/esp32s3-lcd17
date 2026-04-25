@@ -89,15 +89,19 @@ public:
     int    _zoom = MAP_ZOOM_DEFAULT;
 
     bool _needsUpdate = false;  // 标记需要刷新地图
-    int  _canvas_x = 0;         // canvas 在屏幕上的位置（每次刷新后更新）
+    int  _canvas_x = 0;
     int  _canvas_y = 0;
+    int  _lastCenterX = -1;    // 上次加载的中心瓦片坐标
+    int  _lastCenterY = -1;
+    int  _lastCenterZ = -1;
 
     // ── IMU / 航向角 ──────────────────────────────────────
     SensorQMI8658 _imu;
     bool   _imuReady    = false;
     float  _heading     = 0.0f;   // 当前航向角（度，顺时针为正，北=0）
     uint32_t _lastImuMs = 0;
-    lv_color_t *_arrow_buf = nullptr;  // 箭头 canvas buffer
+    lv_color_t *_arrow_buf  = nullptr;
+    lv_color_t *_tile_buf   = nullptr;  // 纯瓦片备份（不含轨迹/箭头）
 
     // ── 轨迹数据 ──────────────────────────────────────────
     struct TrackPoint { double lat, lon; };
@@ -122,6 +126,13 @@ public:
                 return;
             }
             memset(s_canvas_buf, 0x1a, MAP_CANVAS_W * MAP_CANVAS_H * sizeof(lv_color_t));
+        }
+
+        if (!_tile_buf) {
+            _tile_buf = (lv_color_t*)ps_malloc(
+                MAP_CANVAS_W * MAP_CANVAS_H * sizeof(lv_color_t));
+            if (_tile_buf)
+                memset(_tile_buf, 0x1a, MAP_CANVAS_W * MAP_CANVAS_H * sizeof(lv_color_t));
         }
 
         screen = parent;
@@ -294,24 +305,42 @@ private:
     // 下载并绘制 3×3 瓦片到 canvas，然后动态定位 canvas 并叠加轨迹
     void _loadTiles() {
         TileXY center = latLonToTile(_lat, _lon, _zoom);
-        Serial.printf("[MAP] 加载瓦片 center=(%d,%d) zoom=%d\n", center.x, center.y, _zoom);
 
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                int tx = center.x + dx;
-                int ty = center.y + dy;
-                int ox = (dx + 1) * TILE_SIZE;
-                int oy = (dy + 1) * TILE_SIZE;
+        // 只有中心瓦片变化时才重新下载（跨瓦片或 zoom 变化）
+        bool tilesChanged = (center.x != _lastCenterX ||
+                             center.y != _lastCenterY ||
+                             center.z != _lastCenterZ);
 
-                size_t len = 0;
-                uint8_t *jpg = tileMap.getTile(tx, ty, _zoom, len);
-                if (jpg && len > 0) {
-                    _drawJpegToCanvas(jpg, len, ox, oy);
-                    free(jpg);
-                } else {
-                    _fillRect(ox, oy, TILE_SIZE, TILE_SIZE, lv_color_hex(0x2a2a3a));
+        if (tilesChanged) {
+            Serial.printf("[MAP] 下载瓦片 center=(%d,%d) zoom=%d\n", center.x, center.y, _zoom);
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int tx = center.x + dx;
+                    int ty = center.y + dy;
+                    int ox = (dx + 1) * TILE_SIZE;
+                    int oy = (dy + 1) * TILE_SIZE;
+
+                    size_t len = 0;
+                    uint8_t *jpg = tileMap.getTile(tx, ty, _zoom, len);
+                    if (jpg && len > 0) {
+                        _drawJpegToCanvas(jpg, len, ox, oy);
+                        free(jpg);
+                    } else {
+                        _fillRect(ox, oy, TILE_SIZE, TILE_SIZE, lv_color_hex(0x2a2a3a));
+                    }
                 }
             }
+            _lastCenterX = center.x;
+            _lastCenterY = center.y;
+            _lastCenterZ = center.z;
+            // 保存纯瓦片备份
+            if (_tile_buf)
+                memcpy(_tile_buf, s_canvas_buf, MAP_CANVAS_W * MAP_CANVAS_H * sizeof(lv_color_t));
+        } else {
+            // 从备份恢复纯瓦片，清除上次的轨迹/箭头
+            if (_tile_buf)
+                memcpy(s_canvas_buf, _tile_buf, MAP_CANVAS_W * MAP_CANVAS_H * sizeof(lv_color_t));
+            Serial.printf("[MAP] 瓦片未变，仅重绘叠加层\n");
         }
 
         // ── 计算 canvas 在屏幕上的位置，使 GPS 点精确落在屏幕中心 ──
@@ -453,10 +482,9 @@ private:
 
     // ── 绘制轨迹到 canvas buf ────────────────────────────
     void _drawTrack() {
-        if (_trackCount < 1) return;
+        if (_trackCount < 2) return;
 
-        lv_color_t track_color = lv_color_make(30, 144, 255);   // 道奇蓝
-        lv_color_t dot_color   = lv_color_make(100, 200, 255);  // 浅蓝（历史点）
+        lv_color_t track_color = lv_color_make(220, 40, 40);  // 红色轨迹线
 
         int prev_cx = 0, prev_cy = 0;
         bool has_prev = false;
@@ -466,21 +494,7 @@ private:
             bool visible = _latLonToCanvasXY(_track[i].lat, _track[i].lon, cx, cy);
 
             if (has_prev && visible) {
-                // 画连线
                 _drawLine(prev_cx, prev_cy, cx, cy, track_color, 3);
-            }
-
-            // 画历史点（小圆点，半径 3）
-            if (visible && i < _trackCount - 1) {
-                for (int ry = -3; ry <= 3; ry++) {
-                    for (int rx = -3; rx <= 3; rx++) {
-                        if (rx * rx + ry * ry <= 9) {
-                            int px = cx + rx, py = cy + ry;
-                            if (px >= 0 && px < MAP_CANVAS_W && py >= 0 && py < MAP_CANVAS_H)
-                                s_canvas_buf[py * MAP_CANVAS_W + px] = dot_color;
-                        }
-                    }
-                }
             }
 
             if (visible) { prev_cx = cx; prev_cy = cy; has_prev = true; }
