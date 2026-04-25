@@ -17,6 +17,7 @@
 #include <Arduino.h>
 #include <lvgl.h>
 #include <TJpg_Decoder.h>
+#include <pngle.h>
 #include "tile_map.h"
 #include "pin_config.h"
 #include "SensorQMI8658.hpp"
@@ -47,6 +48,21 @@ static bool jpegOutputCb(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t 
         }
     }
     return true;
+}
+
+// ── PNG 解码上下文（pngle 回调）────────────────────────────
+static void pngDrawCb(pngle_t *pngle, uint32_t x, uint32_t y,
+                      uint32_t w, uint32_t h,
+                      const uint8_t rgba[4]) {
+    if (!s_canvas_buf) return;
+    int cx = s_tile_ox + (int)x;
+    int cy = s_tile_oy + (int)y;
+    if (cx < 0 || cx >= MAP_CANVAS_W || cy < 0 || cy >= MAP_CANVAS_H) return;
+    // RGB888 → RGB565
+    uint16_t r = rgba[0] >> 3;
+    uint16_t g = rgba[1] >> 2;
+    uint16_t b = rgba[2] >> 3;
+    s_canvas_buf[cy * MAP_CANVAS_W + cx].full = (r << 11) | (g << 5) | b;
 }
 
 // ── 轨迹参数 ──────────────────────────────────────────────
@@ -265,12 +281,13 @@ public:
     }
 
 private:
-    // ── GPS 点的全局像素坐标（Web Mercator，单位：像素）────
-    // 全局像素 = 瓦片编号(浮点) × TILE_SIZE
+    // ── GPS 点的全局像素坐标（先转 GCJ-02，再算 Web Mercator）
     void _latLonToGlobalPx(double lat, double lon, double &gx, double &gy) {
+        double glat, glon;
+        wgs84ToGcj02(lat, lon, glat, glon);
         double n = pow(2.0, _zoom);
-        gx = ((lon + 180.0) / 360.0) * n * TILE_SIZE;
-        double lat_r = lat * M_PI / 180.0;
+        gx = ((glon + 180.0) / 360.0) * n * TILE_SIZE;
+        double lat_r = glat * M_PI / 180.0;
         gy = (1.0 - log(tan(lat_r) + 1.0 / cos(lat_r)) / M_PI) / 2.0 * n * TILE_SIZE;
     }
 
@@ -471,12 +488,22 @@ private:
         }
     }
 
-    // 解码 JPEG 并写入 canvas 指定位置
+    // 解码瓦片（JPEG 或 PNG）并写入 canvas 指定位置
     void _drawJpegToCanvas(uint8_t *data, size_t len, int ox, int oy) {
         s_tile_ox = ox;
         s_tile_oy = oy;
-        // TJpgDec 从内存解码，回调写入 s_canvas_buf
+#ifdef TILE_IS_PNG
+        // PNG 解码（pngle）
+        pngle_t *pngle = pngle_new();
+        if (pngle) {
+            pngle_set_draw_callback(pngle, pngDrawCb);
+            pngle_feed(pngle, data, len);
+            pngle_destroy(pngle);
+        }
+#else
+        // JPEG 解码（TJpgDec）
         TJpgDec.drawJpg(0, 0, data, len);
+#endif
     }
 
     // 填充纯色矩形到 canvas 缓冲区
