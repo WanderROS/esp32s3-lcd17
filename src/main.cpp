@@ -10,23 +10,19 @@
 #include "es7210.h"
 #include "ESP_SR.h"
 #include "esp_partition.h"
+#include "esp_task_wdt.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <SPIFFS.h>
 #include <SD_MMC.h>
 
 #include "lv_fs_memfile.h" // LVGL 内存文件系统驱动
 #include "ble_prov.h"
-#include "wifi_config.h"   // 仅保留云服务 API Key 等配置
-#include "aliyun_asr.h"
-#include "qwen_llm.h"
-#include "aliyun_tts.h"
+#include "offline_tts.h"   // 离线 ESP-TTS 语音合成
 #include "map_screen.h"    // 地图界面
 #include "gpx_track.h"     // 无锡骑行 GPX 轨迹
 
-// ===== 唤醒词命令（保留用于触发录音） =====
-static const sr_cmd_t sr_commands[] = {};  // 无自定义命令，仅用唤醒词
+// ===== 唤醒词命令（无自定义命令，仅用唤醒词） =====
+static const sr_cmd_t sr_commands[] = {};
 
 // ===== 地图 =====
 static MapScreen g_map;
@@ -37,11 +33,8 @@ static int s_sim_gps_idx = 0;
 
 // ===== 状态机 =====
 enum VoiceState {
-    STATE_IDLE,        // 等待唤醒
-    STATE_RECORDING,   // 录音中
-    STATE_ASR,         // 语音识别中
-    STATE_LLM,         // 大模型推理中
-    STATE_TTS,         // 语音合成+播放中
+    STATE_IDLE,      // 等待唤醒
+    STATE_SPEAKING,  // 离线 TTS 播放中
 };
 
 static volatile VoiceState voice_state = STATE_IDLE;
@@ -53,11 +46,8 @@ static volatile bool g_provisioning = false;  // 配网进行中，延迟主界�
 #define EXAMPLE_VOICE_VOLUME    75  // 降低音量避免功放过驱动破音（范围 0~100）
 #define EXAMPLE_ES8311_MIC_GAIN (es8311_mic_gain_t)(6)
 #define EXAMPLE_ES7210_MIC_GAIN GAIN_30DB
-#define RECORD_TIME_SEC         6
-#define RECORD_BUFFER_SIZE      (EXAMPLE_SAMPLE_RATE * RECORD_TIME_SEC)
 
 I2SClass i2s;
-static int16_t *record_buffer = NULL;
 
 // ===== LVGL 配置 =====
 #define EXAMPLE_LVGL_TICK_PERIOD_MS 2
@@ -77,18 +67,10 @@ Arduino_CO5300 *gfx = new Arduino_CO5300(
 
 // ===== UI 标签 =====
 static lv_obj_t *lbl_status = NULL;
-static lv_obj_t *lbl_asr    = NULL;
-static lv_obj_t *lbl_reply  = NULL;
 
 // 线程安全的 UI 更新（从任意任务调用）
 static void ui_set_status(const char *text) {
     if (lbl_status) lv_label_set_text(lbl_status, text);
-}
-static void ui_set_asr(const char *text) {
-    if (lbl_asr) lv_label_set_text(lbl_asr, text);
-}
-static void ui_set_reply(const char *text) {
-    if (lbl_reply) lv_label_set_text(lbl_reply, text);
 }
 
 // ===== ES8311 初始化 =====
@@ -112,30 +94,7 @@ esp_err_t es8311_codec_init(void) {
     return ESP_OK;
 }
 
-// ===== 录音函数（单声道，从立体声提取左声道）=====
-bool do_record(int16_t *out_buf, size_t samples) {
-    size_t stereo_bytes = samples * 2 * sizeof(int16_t);
-    int16_t *stereo = (int16_t *)heap_caps_malloc(stereo_bytes, MALLOC_CAP_SPIRAM);
-    if (!stereo) {
-        Serial.println("[REC] 立体声缓冲区分配失败");
-        return false;
-    }
 
-    size_t total_read = 0;
-    uint32_t deadline = millis() + (RECORD_TIME_SEC + 2) * 1000;
-    while (total_read < stereo_bytes && millis() < deadline) {
-        size_t n = i2s.readBytes((char *)stereo + total_read, stereo_bytes - total_read);
-        total_read += n;
-    }
-
-    // 提取左声道
-    for (size_t i = 0; i < samples; i++) {
-        out_buf[i] = stereo[i * 2];
-    }
-    heap_caps_free(stereo);
-    Serial.printf("[REC] 录音完成，读取 %d bytes\n", total_read);
-    return total_read > 0;
-}
 
 // ===== 主音频任务（运行在 Core 1）=====
 void audio_task(void *param) {
@@ -153,6 +112,7 @@ void audio_task(void *param) {
         vTaskDelete(NULL);
     }
 
+    // ES7210 麦克风阵列（保留，ESP_SR 需要从 I2S 读取音频）
     audio_hal_codec_config_t es7210_cfg = {
         .adc_input  = AUDIO_HAL_ADC_INPUT_ALL,
         .dac_output = AUDIO_HAL_DAC_OUTPUT_ALL,
@@ -183,19 +143,16 @@ void audio_task(void *param) {
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // 免唤醒窗口截止时间（在 lambda 里访问需要用全局变量）
-    static uint32_t s_free_talk_until = 0;
+    // --- 初始化离线 ESP-TTS ---
+    if (!offline_tts_init()) {
+        Serial.println("[AUDIO] ESP-TTS 初始化失败，继续启动（无 TTS）");
+    }
 
     // --- 初始化 ESP_SR 唤醒词检测 ---
     ESP_SR.onEvent([](sr_event_t event, int command_id, int phrase_id) {
         switch (event) {
             case SR_EVENT_WAKEWORD:
                 Serial.println("[SR] 唤醒词检测到!");
-                // 免唤醒窗口内：第一阶段就触发，响应更快
-                if (voice_state == STATE_IDLE && millis() < s_free_talk_until) {
-                    wake_detected = true;
-                    Serial.println("[SR] 免唤醒窗口内直接触发");
-                }
                 break;
             case SR_EVENT_WAKEWORD_CHANNEL:
                 Serial.printf("[SR] 唤醒词通道 %d 确认!\n", command_id);
@@ -219,118 +176,32 @@ void audio_task(void *param) {
     Serial.println("[SR] 等待唤醒词 '小爱同学'...");
     ui_set_status("等待唤醒...");
 
-    // --- 分配录音缓冲区 ---
-    record_buffer = (int16_t *)heap_caps_malloc(
-        RECORD_BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!record_buffer) {
-        Serial.println("[AUDIO] 录音缓冲区分配失败!");
-        vTaskDelete(NULL);
-    }
-
     // ===== 主循环 =====
-    #define FREE_TALK_TIMEOUT_MS 30000  // 免唤醒窗口 30 秒
-    // s_free_talk_until 已在上方声明为 static
+    // 将 audio_task 订阅到 WDT，防止 ESP_SR 内部 esp_task_wdt_reset 报 task not found
+    esp_task_wdt_add(NULL);
 
     while (1) {
-        bool in_free_talk = (millis() < s_free_talk_until);
+        esp_task_wdt_reset();  // 定期喂狗
 
         if (wake_detected) {
             wake_detected = false;
-            voice_state = STATE_RECORDING;
+            voice_state = STATE_SPEAKING;
 
-            // 1. 停止唤醒词检测，开始录音
+            Serial.println("\n===== 唤醒，播放离线 TTS =====");
+            ui_set_status("播放中...");
+
+            // 停止唤醒词检测，避免 I2S 资源冲突
             ESP_SR.setMode(SR_MODE_OFF);
             vTaskDelay(pdMS_TO_TICKS(100));
 
-            Serial.println("\n===== 开始录音 =====");
-            ui_set_status("录音中...");
-            ui_set_asr("");
-            ui_set_reply("");
+            // 离线 TTS 合成并播放（xiaoxin 音色用拼音接口，逗号分隔）
+            // 反汇编确认：esp_tts_parser_pinyin 分隔符为 ',' (0x2C)，不是空格
+            offline_tts_speak("nin2,hao3,liu2,shi1,fu1");
 
-            bool rec_ok = do_record(record_buffer, RECORD_BUFFER_SIZE);
-
-            if (!rec_ok) {
-                Serial.println("[REC] 录音失败，返回唤醒模式");
-                ui_set_status("录音失败，重试...");
-                s_free_talk_until = 0;
-                voice_state = STATE_IDLE;
-                ESP_SR.setMode(SR_MODE_WAKEWORD);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-
-            // 2. ASR 语音识别
-            voice_state = STATE_ASR;
-            Serial.println("===== ASR 识别 =====");
-            ui_set_status("识别中...");
-
-            String asr_text;
-            bool asr_ok = aliyun_asr_recognize(record_buffer, RECORD_BUFFER_SIZE, asr_text);
-
-            if (!asr_ok || asr_text.isEmpty()) {
-                Serial.println("[ASR] 识别失败或无内容");
-                // 免唤醒窗口内无内容 = 用户不想继续，退出免唤醒
-                s_free_talk_until = 0;
-                ui_set_status("等待唤醒...");
-                voice_state = STATE_IDLE;
-                ESP_SR.setMode(SR_MODE_WAKEWORD);
-                vTaskDelay(pdMS_TO_TICKS(200));
-                continue;
-            }
-
-            Serial.printf("[ASR] 识别: %s\n", asr_text.c_str());
-            ui_set_asr(asr_text.c_str());
-
-            // 3. 通义千问大模型
-            voice_state = STATE_LLM;
-            Serial.println("===== 大模型推理 =====");
-            ui_set_status("思考中...");
-
-            String llm_reply;
-            bool llm_ok = qwen_chat(asr_text, llm_reply);
-
-            if (!llm_ok || llm_reply.isEmpty()) {
-                Serial.println("[LLM] 推理失败");
-                ui_set_status("网络错误，重试...");
-                aliyun_tts_speak("抱歉，网络出现问题，请稍后再试。");
-                s_free_talk_until = 0;
-                voice_state = STATE_IDLE;
-                ESP_SR.setMode(SR_MODE_WAKEWORD);
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-
-            Serial.printf("[LLM] 回复: %s\n", llm_reply.c_str());
-            ui_set_reply(llm_reply.c_str());
-
-            // 4. TTS 语音合成 + 播放
-            voice_state = STATE_TTS;
-            Serial.println("===== TTS 播放 =====");
-            ui_set_status("播放中...");
-
-            aliyun_tts_speak(llm_reply);
-
-            // 5. 完成：刷新免唤醒窗口，直接触发下一轮录音
-            s_free_talk_until = millis() + FREE_TALK_TIMEOUT_MS;
-            Serial.printf("[SR] 免唤醒窗口激活，剩余 %lu ms\n",
-                          s_free_talk_until - millis());
-            ui_set_status("继续说话 (30s)...");
+            // 播放完毕，恢复唤醒词检测
             voice_state = STATE_IDLE;
+            ui_set_status("等待唤醒...");
             ESP_SR.setMode(SR_MODE_WAKEWORD);
-            // 等待 TTS 播放声音消散，避免录到自己的声音
-            vTaskDelay(pdMS_TO_TICKS(800));
-            // 免唤醒：直接进入下一轮录音，无需唤醒词
-            wake_detected = true;
-        }
-
-        // 免唤醒窗口倒计时提示（每5秒更新一次状态栏）
-        if (s_free_talk_until > 0 && voice_state == STATE_IDLE) {
-            uint32_t now = millis();
-            if (now >= s_free_talk_until) {
-                s_free_talk_until = 0;
-                ui_set_status("等待唤醒...");
-                Serial.println("[SR] 免唤醒窗口已过期");
-            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -381,11 +252,9 @@ static lv_font_t *g_font_cn_20 = nullptr;
 static lv_font_t *g_font_cn_24 = nullptr;
 
 // 需要在字体加载后更新字体的标签（全局保存引用）
-static lv_obj_t *g_lbl_title       = nullptr;
-static lv_obj_t *g_lbl_asr_title   = nullptr;
-static lv_obj_t *g_lbl_reply_title = nullptr;
-static lv_obj_t *g_lbl_hint        = nullptr;
-static lv_obj_t *g_main_scr        = nullptr;  // 主界面屏幕对象（配网时延迟切换）
+static lv_obj_t *g_lbl_title = nullptr;
+static lv_obj_t *g_lbl_hint  = nullptr;
+static lv_obj_t *g_main_scr  = nullptr;  // 主界面屏幕对象（配网时延迟切换）
 
 // 配网界面标签引用（字体加载完后更新）
 static lv_obj_t *g_prov_lbl_title = nullptr;
@@ -402,52 +271,21 @@ static void apply_cn_fonts(void) {
     lv_obj_t *main_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(main_scr, lv_color_hex(0x1a1a2e), 0);
 
+    // 标题
     g_lbl_title = lv_label_create(main_scr);
-    lv_label_set_text(g_lbl_title, "AI \xe8\xaf\xad\xe9\x9f\xb3\xe5\x8a\xa9\xe6\x89\x8b");  // "AI 语音助手"
+    lv_label_set_text(g_lbl_title, "\xe7\xa6\xbb\xe7\xba\xbf\xe8\xaf\xad\xe9\x9f\xb3\xe5\x8a\xa9\xe6\x89\x8b");  // "离线语音助手"
     lv_obj_set_style_text_color(g_lbl_title, lv_color_hex(0x00d4ff), 0);
     lv_obj_set_style_text_font(g_lbl_title, g_font_cn_24 ? g_font_cn_24 : &lv_font_montserrat_24, 0);
     lv_obj_align(g_lbl_title, LV_ALIGN_TOP_MID, 0, 20);
 
+    // 状态标签（居中显示）
     lbl_status = lv_label_create(main_scr);
     lv_label_set_text(lbl_status, "\xe7\xad\x89\xe5\xbe\x85\xe5\x94\xa4\xe9\x86\x92...");  // "等待唤醒..."
     lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xffd700), 0);
     lv_obj_set_style_text_font(lbl_status, g_font_cn_20 ? g_font_cn_20 : &lv_font_montserrat_18, 0);
-    lv_obj_align(lbl_status, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_align(lbl_status, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t *line = lv_obj_create(main_scr);
-    lv_obj_set_size(line, 400, 2);
-    lv_obj_set_style_bg_color(line, lv_color_hex(0x444466), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_align(line, LV_ALIGN_TOP_MID, 0, 100);
-
-    g_lbl_asr_title = lv_label_create(main_scr);
-    lv_label_set_text(g_lbl_asr_title, "\xe4\xbd\xa0\xe8\xaf\xb4\xef\xbc\x9a");  // "你说："
-    lv_obj_set_style_text_color(g_lbl_asr_title, lv_color_hex(0x88aaff), 0);
-    lv_obj_set_style_text_font(g_lbl_asr_title, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
-    lv_obj_align(g_lbl_asr_title, LV_ALIGN_TOP_LEFT, 30, 115);
-
-    lbl_asr = lv_label_create(main_scr);
-    lv_label_set_text(lbl_asr, "");
-    lv_label_set_long_mode(lbl_asr, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(lbl_asr, 400);
-    lv_obj_set_style_text_color(lbl_asr, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lbl_asr, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
-    lv_obj_align(lbl_asr, LV_ALIGN_TOP_LEFT, 30, 140);
-
-    g_lbl_reply_title = lv_label_create(main_scr);
-    lv_label_set_text(g_lbl_reply_title, "AI\xef\xbc\x9a");  // "AI："
-    lv_obj_set_style_text_color(g_lbl_reply_title, lv_color_hex(0x88ffaa), 0);
-    lv_obj_set_style_text_font(g_lbl_reply_title, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
-    lv_obj_align(g_lbl_reply_title, LV_ALIGN_TOP_LEFT, 30, 250);
-
-    lbl_reply = lv_label_create(main_scr);
-    lv_label_set_text(lbl_reply, "");
-    lv_label_set_long_mode(lbl_reply, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(lbl_reply, 400);
-    lv_obj_set_style_text_color(lbl_reply, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lbl_reply, g_font_cn_16 ? g_font_cn_16 : &lv_font_montserrat_16, 0);
-    lv_obj_align(lbl_reply, LV_ALIGN_TOP_LEFT, 30, 275);
-
+    // 底部提示
     g_lbl_hint = lv_label_create(main_scr);
     lv_label_set_text(g_lbl_hint, "\xe8\xaf\xb4 '\xe5\xb0\x8f\xe7\x88\xb1\xe5\x90\x8c\xe5\xad\xa6' \xe5\x94\xa4\xe9\x86\x92");  // "说 '小爱同学' 唤醒"
     lv_obj_set_style_text_color(g_lbl_hint, lv_color_hex(0x666688), 0);

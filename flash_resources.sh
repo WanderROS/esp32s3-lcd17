@@ -4,7 +4,7 @@
 set -e
 
 MKSPIFFS=~/.platformio/packages/tool-mkspiffs/mkspiffs_espressif32_arduino
-PARTITION_OFFSET="0x610000"
+PARTITION_OFFSET="0x710000"
 PARTITION_SIZE="0x200000"   # 2MB
 SPIFFS_BIN="spiffs_fonts.bin"
 
