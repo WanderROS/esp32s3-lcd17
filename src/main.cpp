@@ -194,9 +194,8 @@ void audio_task(void *param) {
             ESP_SR.setMode(SR_MODE_OFF);
             vTaskDelay(pdMS_TO_TICKS(100));
 
-            // 离线 TTS 合成并播放（xiaoxin 音色用拼音接口，逗号分隔）
-            // 反汇编确认：esp_tts_parser_pinyin 分隔符为 ',' (0x2C)，不是空格
-            offline_tts_speak("nin2,hao3,liu2,shi1,fu1");
+            // 离线 TTS 合成并播放（xiaole 音色支持直接输入汉字）
+            offline_tts_speak("你好，我在这里");
 
             // 播放完毕，恢复唤醒词检测
             voice_state = STATE_IDLE;

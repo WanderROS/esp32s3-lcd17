@@ -2,39 +2,65 @@
 /**
  * offline_tts.h — 基于 ESP-TTS 的离线中文语音合成
  *
- * 使用乐鑫内置 xiaoxin 音色（PCM 数据完全内嵌于 libvoice_set_xiaole.a，无需外部 Flash 分区）。
- * xiaole 音色的 PCM 数据依赖外部 voice data 分区，不适合直接使用。
- * ESP-TTS 只支持中文拼音/常用汉字，英文需转拼音后传入。
+ * 使用 xiaoxin 音色（完整中文词表）+ 外部 Flash 分区（voice_data）存放 PCM 数据。
+ * 支持直接输入任意中文汉字（通过 esp_tts_parse_chinese），无需手动拼音。
+ *
+ * 准备工作：
+ * 1. 分区表（esp_sr_16_large.csv）包含独立的 voice_data 分区（0xC10000，4MB，fat 类型）
+ *    model 分区（0x910000，3MB）保留给 ESP-SR 唤醒词模型 srmodels.bin，两者互不干扰
+ * 2. 将 esp_tts_voice_data_xiaoxin.dat 烧录到 voice_data 分区：
+ *    ./flash_xiaole_voice.sh
+ *    （文件来自 esp-skainet/examples/chinese_tts/esp_tts_voice_data_xiaoxin.dat）
  *
  * 用法：
  *   offline_tts_init();                    // 初始化（一次）
- *   offline_tts_speak("你好，我是小爱同学");  // 合成并播放
+ *   offline_tts_speak("你好，我是小爱同学");  // 直接传汉字，自动合成播放
  */
 
 #include <Arduino.h>
 #include "esp_tts.h"
+#include "esp_tts_voice_template.h"
+#include "esp_partition.h"
 #include "ESP_I2S.h"
 
 extern I2SClass i2s;
 
-// xiaoxin 音色：PCM 完全内嵌在 libvoice_set_xiaole.a（3.5MB），无需外部 Flash 分区
-// 通过 extern "C" 声明强制链接器拉入 esp_tts_voice_xiaoxin.c.obj
-extern "C" const esp_tts_voice_t esp_tts_voice_xiaoxin;
-
 // ── 全局 TTS 句柄（单例） ─────────────────────────────────────
 static esp_tts_handle_t s_tts_handle = nullptr;
+static esp_tts_voice_t *s_voice = nullptr;
 
 /**
- * 初始化 ESP-TTS，必须在 I2S 初始化完成后调用。
- * xiaoxin 音色：PCM 数据内嵌在静态库中（xiaoxin_syll_data），无需外部 Flash 分区。
+ * 初始化 ESP-TTS（xiaoxin 音色 + Flash voice_data 分区映射），必须在 I2S 初始化后调用。
+ * voice_data 分区（fat，0xC10000）存放 xiaoxin PCM，与 model 分区（ESP-SR）相互独立。
  * @return true  成功
  */
 static bool offline_tts_init() {
     if (s_tts_handle) return true;  // 已初始化
 
-    // 使用 xiaoxin 音色：其 syll_data 完整编译进 libvoice_set_xiaole.a（约 4MB）
-    // xiaole 音色 PCM 依赖外部 model 分区，不能直接用
-    s_tts_handle = esp_tts_create(const_cast<esp_tts_voice_t *>(&esp_tts_voice_xiaoxin));
+    // 1. 查找 voice_data 分区（fat 类型，0xC10000，与 model/ESP-SR 分区完全独立）
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "voice_data");
+    if (!part) {
+        Serial.println("[TTS] 错误：未找到 voice_data 分区");
+        Serial.println("[TTS] 请检查分区表并执行 ./flash_xiaole_voice.sh 烧录 voice data");
+        return false;
+    }
+    Serial.printf("[TTS] 找到分区: %s, 地址 0x%x, 大小 %d bytes\n",
+                  part->label, part->address, part->size);
+
+    // 2. 内存映射 PCM 数据到虚拟地址空间
+    const void *voicedata = nullptr;
+    esp_partition_mmap_handle_t mmap;
+    esp_err_t err = esp_partition_mmap(part, 0, part->size,
+                                       ESP_PARTITION_MMAP_DATA, &voicedata, &mmap);
+    if (err != ESP_OK) {
+        Serial.printf("[TTS] 内存映射失败: %s\n", esp_err_to_name(err));
+        return false;
+    }
+
+    // 3. 用 template + 外部 PCM 数据初始化（xiaoxin/xiaole dat 文件通用此方式）
+    s_voice = esp_tts_voice_set_init(&esp_tts_voice_template, (int16_t *)voicedata);
+    s_tts_handle = esp_tts_create(s_voice);
     if (!s_tts_handle) {
         Serial.println("[TTS] esp_tts_create 失败");
         return false;
@@ -44,32 +70,27 @@ static bool offline_tts_init() {
 }
 
 /**
- * 通过拼音合成语音并通过 I2S 播放（阻塞直到播完）。
+ * 通过中文汉字合成语音并通过 I2S 播放（阻塞直到播完）。
  *
- * xiaoxin 音色词表为支付/播报场景，支持声调拼音输入。
- * 拼音格式：音节+声调数字，【逗号】分隔（反汇编确认分隔符为 0x2C=','）
- *   正确示例: "nin2,hao3"   （逗号，不是空格！）
- * 支持的拼音可通过 strings libvoice_set_xiaole.a | grep "^[a-z]*[1-4]$" 查看。
- *
- * @param pinyin  拼音字符串，逗号分隔，如 "nin2,hao3"
+ * xiaoxin 音色支持完整中文常用字（约 3500 字），直接传入汉字即可，无需拼音。
+ * @param text    中文文本，如 "你好世界"
  * @param speed   语速 0~5，默认 3
  */
-static void offline_tts_speak(const char *pinyin, unsigned int speed = 3) {
+static void offline_tts_speak(const char *text, unsigned int speed = 3) {
     if (!s_tts_handle) {
         Serial.println("[TTS] 未初始化，跳过");
         return;
     }
-    if (!pinyin || pinyin[0] == '\0') return;
+    if (!text || text[0] == '\0') return;
 
-    Serial.printf("[TTS] 合成拼音: %s\n", pinyin);
+    Serial.printf("[TTS] 合成文本: %s\n", text);
 
-    // 注意：esp_tts_parse_pinyin 以逗号','为分隔符，不是空格
-    // 需要一个可写的 char[] 副本（函数签名是 char* 非 const char*）
-    char buf[64];
-    strncpy(buf, pinyin, sizeof(buf) - 1);
+    // 使用 esp_tts_parse_chinese 解析汉字（自动转拼音）
+    char buf[256];
+    strncpy(buf, text, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
-    if (!esp_tts_parse_pinyin(s_tts_handle, buf)) {
+    if (!esp_tts_parse_chinese(s_tts_handle, buf)) {
         Serial.println("[TTS] 解析失败");
         return;
     }
