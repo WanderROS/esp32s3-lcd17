@@ -26,6 +26,42 @@ if(NOT SDL2_FOUND)
 endif()
 
 # ============================================================
+# 查找 SDL2_mixer（MP3 音频播放）
+# macOS (homebrew): brew install sdl2_mixer
+# Ubuntu/Debian:    sudo apt install libsdl2-mixer-dev
+# ============================================================
+find_package(SDL2_mixer QUIET)
+if(SDL2_mixer_FOUND)
+    message(STATUS "SDL2_mixer found: audio playback enabled")
+    set(HAVE_SDL2_MIXER TRUE)
+else()
+    # 尝试手动查找（homebrew 路径）
+    find_library(SDL2_MIXER_LIB
+        NAMES SDL2_mixer
+        PATHS /usr/local/lib /opt/homebrew/lib
+    )
+    find_path(SDL2_MIXER_INCLUDE
+        NAMES SDL_mixer.h
+        PATH_SUFFIXES SDL2
+        PATHS /usr/local/include /opt/homebrew/include
+    )
+    if(SDL2_MIXER_LIB AND SDL2_MIXER_INCLUDE)
+        message(STATUS "SDL2_mixer found (manual): ${SDL2_MIXER_LIB}")
+        add_library(SDL2_mixer::SDL2_mixer UNKNOWN IMPORTED)
+        set_target_properties(SDL2_mixer::SDL2_mixer PROPERTIES
+            IMPORTED_LOCATION "${SDL2_MIXER_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${SDL2_MIXER_INCLUDE}"
+        )
+        set(HAVE_SDL2_MIXER TRUE)
+    else()
+        message(WARNING "SDL2_mixer NOT found. Audio playback will be disabled.\n"
+                "  macOS:  brew install sdl2_mixer\n"
+                "  Ubuntu: sudo apt install libsdl2-mixer-dev")
+        set(HAVE_SDL2_MIXER FALSE)
+    endif()
+endif()
+
+# ============================================================
 # LVGL 配置
 # 使用 LV_BUILD_CONF_DIR 方式：sim/ 目录下有 lv_conf.h（转发到 lv_conf_pc.h）
 # LVGL 会用 LV_CONF_INCLUDE_SIMPLE 模式从该目录找 lv_conf.h
@@ -77,25 +113,36 @@ target_compile_definitions(sim PRIVATE
     PC_SIMULATOR=1
 )
 
-target_link_libraries(sim
-    ui_lib
-    lvgl
-    SDL2::SDL2
-    SDL2::SDL2main
-)
+if(HAVE_SDL2_MIXER)
+    target_compile_definitions(sim PRIVATE HAVE_SDL2_MIXER=1)
+    target_link_libraries(sim
+        ui_lib          # 已传递依赖 lvgl
+        SDL2::SDL2
+        SDL2::SDL2main
+        SDL2_mixer::SDL2_mixer
+    )
+else()
+    target_link_libraries(sim
+        ui_lib          # 已传递依赖 lvgl
+        SDL2::SDL2
+        SDL2::SDL2main
+    )
+endif()
 
 # ============================================================
 # 运行时资源：将 assets/ 链接/复制到构建目录
-# 这样可执行文件运行时能在 ./assets/ 找到字体和图片
 # ============================================================
 set(ASSETS_SRC "${ROOT_DIR}/src/lvgl_sd_resource")
 
-# 构建后将 fonts/ 和 images/ 复制到 ${CMAKE_BINARY_DIR}/assets/
+# 构建后将 fonts/、images/、music/ 复制到构建目录的 assets/ 下
+# music/ 目录在源码树中不存在（由用户自行放置 MP3），只在有内容时才复制
 add_custom_command(TARGET sim POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "$<TARGET_FILE_DIR:sim>/assets/fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "$<TARGET_FILE_DIR:sim>/assets/images"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:sim>/assets/music"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${ASSETS_SRC}/fonts"
         "$<TARGET_FILE_DIR:sim>/assets/fonts"

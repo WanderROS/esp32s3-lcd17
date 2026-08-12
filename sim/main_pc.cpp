@@ -7,7 +7,7 @@
  *   - 触摸 (CST9217)      → SDL2 鼠标事件
  *   - RTC (PCF85063)      → 系统时间 (time.h)
  *   - PMU (AXP2101)       → 键盘快捷键模拟
- *   - I2S 音频 (ES8311)   → stub（跳过）
+ *   - I2S 音频 (ES8311)   → SDL2_mixer MP3 播放
  *   - SD 卡 (SDMMC)       → 本地文件系统（assets/ 目录）
  *   - PSRAM               → 标准 malloc
  *
@@ -22,9 +22,21 @@
 #include <ctime>
 #include <chrono>
 #include <thread>
+#include <vector>
+#include <string>
+#include <algorithm>
+
+/* 目录遍历（POSIX） */
+#include <dirent.h>
+#include <sys/stat.h>
 
 /* SDL2 */
 #include <SDL2/SDL.h>
+
+/* SDL2_mixer（条件编译：找不到时音频功能禁用） */
+#ifdef HAVE_SDL2_MIXER
+#  include <SDL2/SDL_mixer.h>
+#endif
 
 /* LVGL（PC 端使用 sim/lv_conf_pc.h） */
 #include "lvgl.h"
@@ -33,7 +45,7 @@
 #include "lvgl_sd_resource/lvgl_sd_resource.h"
 
 /* ======================================================
- * 编译期检查：确保不引入任何嵌入式专用头文件
+ * 编译期检查
  * ====================================================== */
 #ifndef PC_SIMULATOR
 #  error "main_pc.cpp must be compiled with PC_SIMULATOR defined"
@@ -44,14 +56,15 @@
  * ====================================================== */
 #define SCREEN_WIDTH    466
 #define SCREEN_HEIGHT   466
-#define DISP_SCALE      1       /* 高 DPI 屏幕可设为 2 */
+#define DISP_SCALE      1
 #define TICK_PERIOD_MS  2
 /*
- * ASSETS_PATH 是 LVGL FS 驱动字母 'A' 映射到的本地根目录（相对于可执行文件）。
- * 设为 "" 表示映射到当前工作目录，这样 "A:assets/fonts/xxx" → "./assets/fonts/xxx"。
- * 与嵌入式端调用 lvgl_sd_resource_init("A:assets/") 保持一致。
+ * ASSETS_PATH：LVGL FS 驱动 'A' 映射到的本地根目录（相对可执行文件）。
+ * 设为 "" → 映射到当前工作目录，"A:assets/fonts/xxx" → "./assets/fonts/xxx"。
  */
-#define ASSETS_PATH     ""  /* 映射到当前目录，路径通过 A:assets/ 传给资源系统 */
+#define ASSETS_PATH     ""
+/* 音乐目录（相对可执行文件），对应嵌入式端 SD 卡根目录 */
+#define MUSIC_DIR       "assets/music"
 
 static lv_display_t *g_disp   = nullptr;
 static lv_indev_t   *g_indev  = nullptr;
@@ -62,25 +75,150 @@ static lv_indev_t   *g_indev  = nullptr;
 static SDL_Window   *g_window   = nullptr;
 static SDL_Renderer *g_renderer = nullptr;
 static SDL_Texture  *g_texture  = nullptr;
-static uint32_t     *g_px_buf   = nullptr;   /* ARGB8888 pixel buffer */
+static uint32_t     *g_px_buf   = nullptr;
+
+/* ======================================================
+ * 音频上下文
+ * ====================================================== */
+#ifdef HAVE_SDL2_MIXER
+
+static std::vector<std::string> g_mp3_files;   /* 扫描到的 MP3 列表 */
+static int                      g_mp3_index = 0;
+static Mix_Music               *g_music     = nullptr;
+static bool                     g_audio_ok  = false;
+
+/* 前向声明 */
+static void SDLCALL audio_music_finished_cb(void);
+
+/* 扫描目录，收集所有 .mp3 文件（不区分大小写） */
+static void audio_scan_music_dir(const char *dir_path)
+{
+    DIR *d = opendir(dir_path);
+    if (!d) {
+        printf("[Audio] Music dir not found: %s  (put MP3s there to enable playback)\n",
+               dir_path);
+        return;
+    }
+    struct dirent *ent;
+    while ((ent = readdir(d)) != nullptr) {
+        if (ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN) continue;
+        std::string name(ent->d_name);
+        /* 不区分大小写匹配 .mp3 */
+        if (name.size() > 4) {
+            std::string ext = name.substr(name.size() - 4);
+            for (auto &c : ext) c = (char)tolower((unsigned char)c);
+            if (ext == ".mp3") {
+                g_mp3_files.push_back(std::string(dir_path) + "/" + name);
+            }
+        }
+    }
+    closedir(d);
+
+    /* 按文件名排序，与嵌入式端目录读取顺序保持一致 */
+    std::sort(g_mp3_files.begin(), g_mp3_files.end());
+
+    printf("[Audio] Found %zu MP3 file(s) in %s\n", g_mp3_files.size(), dir_path);
+    for (const auto &f : g_mp3_files) {
+        printf("        %s\n", f.c_str());
+    }
+}
+
+/* 播放指定索引的 MP3 */
+static void audio_play_index(int idx)
+{
+    if (g_mp3_files.empty()) return;
+
+    /* 先注销回调，防止 Mix_HaltMusic() 触发 finished 回调造成递归切歌 */
+    Mix_HookMusicFinished(nullptr);
+
+    if (g_music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(g_music);
+        g_music = nullptr;
+    }
+
+    const char *path = g_mp3_files[idx].c_str();
+    g_music = Mix_LoadMUS(path);
+    if (!g_music) {
+        fprintf(stderr, "[Audio] Mix_LoadMUS failed: %s  (%s)\n",
+                path, Mix_GetError());
+        Mix_HookMusicFinished(audio_music_finished_cb);
+        return;
+    }
+
+    if (Mix_PlayMusic(g_music, 1) != 0) {
+        fprintf(stderr, "[Audio] Mix_PlayMusic failed: %s\n", Mix_GetError());
+        Mix_HookMusicFinished(audio_music_finished_cb);
+        return;
+    }
+    printf("[Audio] Playing: %s\n", path);
+
+    /* 重新注册回调，等待本曲播放结束后自动切下一首 */
+    Mix_HookMusicFinished(audio_music_finished_cb);
+
+    /* 更新 LVGL Observer（song_playing = 1 表示播放中） */
+    lv_subject_set_int(&song_playing, 1);
+}
+
+/* 切歌回调（在 SDL_mixer 曲目结束时由 audio 线程调用） */
+static void SDLCALL audio_music_finished_cb(void)
+{
+    if (g_mp3_files.empty()) return;
+    g_mp3_index = (g_mp3_index + 1) % (int)g_mp3_files.size();
+    /* Mix_HookMusicFinished 回调不能直接调用 Mix_PlayMusic，
+     * 用 SDL 用户事件在主线程延迟处理 */
+    SDL_Event ev;
+    SDL_zero(ev);
+    ev.type = SDL_USEREVENT;
+    ev.user.code = 1;   /* code=1: 播放下一首 */
+    SDL_PushEvent(&ev);
+}
+
+/* 初始化 SDL2_mixer 并开始播放 */
+static void audio_init(void)
+{
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
+        fprintf(stderr, "[Audio] Mix_OpenAudio failed: %s\n", Mix_GetError());
+        return;
+    }
+    Mix_VolumeMusic(90);    /* 对应嵌入式端 setVolume(6)，约 70% */
+
+    audio_scan_music_dir(MUSIC_DIR);
+
+    if (!g_mp3_files.empty()) {
+        Mix_HookMusicFinished(audio_music_finished_cb);
+        audio_play_index(g_mp3_index);
+    }
+    g_audio_ok = true;
+}
+
+/* 清理 */
+static void audio_deinit(void)
+{
+    if (g_music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(g_music);
+        g_music = nullptr;
+    }
+    Mix_CloseAudio();
+}
+
+#endif /* HAVE_SDL2_MIXER */
 
 /* ======================================================
  * LVGL 显示刷新回调（SDL2 后端）
  * ====================================================== */
 static void sdl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
-    /* px_map 是 XRGB8888（32-bit），与 SDL2 ARGB8888 格式一致 */
     int32_t w = lv_area_get_width(area);
     int32_t h = lv_area_get_height(area);
 
-    /* 将 LVGL 缓冲区整行复制到 g_px_buf */
     uint32_t *src = (uint32_t *)px_map;
     for (int32_t y = 0; y < h; y++) {
         uint32_t *dst_row = g_px_buf + (area->y1 + y) * SCREEN_WIDTH + area->x1;
         memcpy(dst_row, src + y * w, w * sizeof(uint32_t));
     }
 
-    /* 全屏刷新时（FULL 模式）直接更新纹理并渲染 */
     if (lv_display_flush_is_last(disp)) {
         SDL_UpdateTexture(g_texture, nullptr, g_px_buf,
                           SCREEN_WIDTH * sizeof(uint32_t));
@@ -93,25 +231,20 @@ static void sdl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_
 }
 
 /* ======================================================
- * LVGL 触摸/鼠标输入读取回调
+ * LVGL 鼠标输入读取回调
  * ====================================================== */
 static void sdl_indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     int mx, my;
     uint32_t buttons = SDL_GetMouseState(&mx, &my);
-
-    /* 支持 DISP_SCALE 缩放 */
     data->point.x = (lv_coord_t)(mx / DISP_SCALE);
     data->point.y = (lv_coord_t)(my / DISP_SCALE);
     data->state   = (buttons & SDL_BUTTON_LMASK)
-                    ? LV_INDEV_STATE_PR
-                    : LV_INDEV_STATE_REL;
+                    ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
 }
 
 /* ======================================================
- * LVGL 文件系统驱动（映射到本地 assets/ 目录）
- * 与 src/main.cpp 中的驱动字母和回调接口完全相同，
- * 唯一差异：路径前缀从 /sdcard/ 变为 ASSETS_PATH
+ * LVGL 文件系统驱动（A: → 当前工作目录）
  * ====================================================== */
 static void *pc_fs_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode)
 {
@@ -119,9 +252,7 @@ static void *pc_fs_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode
     char full_path[512];
     snprintf(full_path, sizeof(full_path), "%s%s", ASSETS_PATH, path);
     FILE *f = fopen(full_path, flags);
-    if (!f) {
-        fprintf(stderr, "[FS] open failed: %s\n", full_path);
-    }
+    if (!f) fprintf(stderr, "[FS] open failed: %s\n", full_path);
     return f;
 }
 
@@ -162,7 +293,7 @@ static void lv_fs_pc_init(void)
 {
     static lv_fs_drv_t drv;
     lv_fs_drv_init(&drv);
-    drv.letter   = 'A';           /* 与嵌入式端驱动字母保持一致 */
+    drv.letter   = 'A';
     drv.open_cb  = pc_fs_open_cb;
     drv.close_cb = pc_fs_close_cb;
     drv.read_cb  = pc_fs_read_cb;
@@ -177,7 +308,11 @@ static void lv_fs_pc_init(void)
  * ====================================================== */
 static bool sdl_init(void)
 {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+    uint32_t flags = SDL_INIT_VIDEO | SDL_INIT_EVENTS;
+#ifdef HAVE_SDL2_MIXER
+    flags |= SDL_INIT_AUDIO;
+#endif
+    if (SDL_Init(flags) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
@@ -200,7 +335,6 @@ static bool sdl_init(void)
         return false;
     }
 
-    /* SDL2 ARGB8888 对应 LVGL XRGB8888（高字节 X 忽略） */
     g_texture = SDL_CreateTexture(g_renderer,
                                   SDL_PIXELFORMAT_ARGB8888,
                                   SDL_TEXTUREACCESS_STREAMING,
@@ -216,7 +350,6 @@ static bool sdl_init(void)
         return false;
     }
 
-    /* 缩放渲染到实际窗口大小 */
     SDL_RenderSetLogicalSize(g_renderer,
                              SCREEN_WIDTH * DISP_SCALE,
                              SCREEN_HEIGHT * DISP_SCALE);
@@ -224,18 +357,13 @@ static bool sdl_init(void)
 }
 
 /* ======================================================
- * 初始化 LVGL + 显示 + 输入设备
+ * 初始化 LVGL
  * ====================================================== */
 static void lvgl_init(void)
 {
     lv_init();
 
-    /* 双缓冲（全屏 FULL 模式）
-     * 必须用 lv_draw_buf_width_to_stride() 计算实际 stride，
-     * 因为 LVGL 内部可能对行宽进行对齐，使得 stride >= width * bpp。
-     * buf_size 必须 >= stride * height，否则 lv_display_set_buffers 会断言失败。
-     */
-    lv_color_format_t cf = LV_COLOR_FORMAT_NATIVE; /* XRGB8888 for 32-bit depth */
+    lv_color_format_t cf = LV_COLOR_FORMAT_NATIVE;
     uint32_t stride   = lv_draw_buf_width_to_stride(SCREEN_WIDTH, cf);
     size_t   buf_size = (size_t)stride * SCREEN_HEIGHT;
 
@@ -252,14 +380,13 @@ static void lvgl_init(void)
                            LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_rotation(g_disp, LV_DISPLAY_ROTATION_0);
 
-    /* 鼠标输入设备 */
     g_indev = lv_indev_create();
     lv_indev_set_type(g_indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(g_indev, sdl_indev_read_cb);
 }
 
 /* ======================================================
- * 创建时钟屏幕（与 src/main.cpp setup() 中相同逻辑）
+ * 创建时钟屏幕
  * ====================================================== */
 static void create_clock_screen(void)
 {
@@ -268,19 +395,14 @@ static void create_clock_screen(void)
 
     lv_obj_t *clock_label = lv_label_create(clock_scr);
     lv_obj_set_style_text_color(clock_label, lv_color_white(), 0);
-    /* geist_light_60 在 PC 端也通过文件系统加载，若加载失败则回退默认字体 */
-    if (geist_light_60) {
-        lv_obj_set_style_text_font(clock_label, geist_light_60, 0);
-    }
+    if (geist_light_60) lv_obj_set_style_text_font(clock_label, geist_light_60, 0);
     lv_obj_align(clock_label, LV_ALIGN_CENTER, 0, -20);
     lv_label_set_text(clock_label, "00:00:00");
     lv_obj_set_name(clock_label, "clock_label");
 
     lv_obj_t *date_label = lv_label_create(clock_scr);
     lv_obj_set_style_text_color(date_label, lv_color_hex(0xAAAAAA), 0);
-    if (geist_semibold_20) {
-        lv_obj_set_style_text_font(date_label, geist_semibold_20, 0);
-    }
+    if (geist_semibold_20) lv_obj_set_style_text_font(date_label, geist_semibold_20, 0);
     lv_obj_align(date_label, LV_ALIGN_CENTER, 0, 40);
     lv_label_set_text(date_label, "2026-01-01");
     lv_obj_set_name(date_label, "date_label");
@@ -289,7 +411,7 @@ static void create_clock_screen(void)
 }
 
 /* ======================================================
- * 每秒更新时钟（用系统时间替代 RTC）
+ * 每秒更新时钟
  * ====================================================== */
 static uint32_t g_last_clock_ms = 0;
 static char     g_disp_buf[64];
@@ -321,8 +443,7 @@ static void update_clock(void)
 }
 
 /* ======================================================
- * 处理 SDL2 事件（窗口关闭、键盘模拟 PMU 按键等）
- * 返回 false 表示退出
+ * SDL2 事件处理
  * ====================================================== */
 static uint8_t g_current_rotation = 0;
 
@@ -334,34 +455,98 @@ static bool handle_sdl_events(void)
             case SDL_QUIT:
                 return false;
 
+            /* SDL_USEREVENT: 曲目结束，播放下一首 */
+            case SDL_USEREVENT:
+#ifdef HAVE_SDL2_MIXER
+                if (e.user.code == 1 && g_audio_ok) {
+                    audio_play_index(g_mp3_index);
+                }
+#endif
+                break;
+
             case SDL_KEYDOWN:
                 switch (e.key.keysym.sym) {
                     case SDLK_ESCAPE:
                     case SDLK_q:
                         return false;
 
-                    /* 模拟短按电源键：切换屏幕旋转 */
+                    /* R：切换屏幕旋转（模拟电源短按） */
                     case SDLK_r: {
                         g_current_rotation = (g_current_rotation + 1) % 4;
                         lv_display_rotation_t rotations[] = {
-                            LV_DISPLAY_ROTATION_0,
-                            LV_DISPLAY_ROTATION_90,
-                            LV_DISPLAY_ROTATION_180,
-                            LV_DISPLAY_ROTATION_270
+                            LV_DISPLAY_ROTATION_0,  LV_DISPLAY_ROTATION_90,
+                            LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270
                         };
                         lv_display_set_rotation(g_disp, rotations[g_current_rotation]);
-                        printf("[SIM] Rotation: %d degrees\n",
-                               g_current_rotation * 90);
+                        printf("[SIM] Rotation: %d°\n", g_current_rotation * 90);
                         break;
                     }
 
-                    /* 模拟切换深色/浅色主题 */
+                    /* T：切换主题 */
                     case SDLK_t: {
                         int32_t cur = lv_subject_get_int(&dark_theme);
                         lv_subject_set_int(&dark_theme, cur ? 0 : 1);
                         printf("[SIM] Theme: %s\n", cur ? "light" : "dark");
                         break;
                     }
+
+#ifdef HAVE_SDL2_MIXER
+                    /* 空格：暂停 / 继续 */
+                    case SDLK_SPACE: {
+                        if (!g_audio_ok || g_mp3_files.empty()) break;
+                        if (Mix_PausedMusic()) {
+                            Mix_ResumeMusic();
+                            lv_subject_set_int(&song_playing, 1);
+                            printf("[Audio] Resumed\n");
+                        } else {
+                            Mix_PauseMusic();
+                            lv_subject_set_int(&song_playing, 0);
+                            printf("[Audio] Paused\n");
+                        }
+                        break;
+                    }
+
+                    /* N：下一首 */
+                    case SDLK_n: {
+                        if (!g_audio_ok || g_mp3_files.empty()) break;
+                        g_mp3_index = (g_mp3_index + 1) % (int)g_mp3_files.size();
+                        audio_play_index(g_mp3_index);
+                        break;
+                    }
+
+                    /* P：上一首 */
+                    case SDLK_p: {
+                        if (!g_audio_ok || g_mp3_files.empty()) break;
+                        g_mp3_index = ((g_mp3_index - 1) +
+                                       (int)g_mp3_files.size()) % (int)g_mp3_files.size();
+                        audio_play_index(g_mp3_index);
+                        break;
+                    }
+
+                    /* 上箭头：音量 +10% */
+                    case SDLK_UP: {
+                        if (!g_audio_ok) break;
+                        int vol = Mix_VolumeMusic(-1);
+                        vol = std::min(vol + 13, MIX_MAX_VOLUME);
+                        Mix_VolumeMusic(vol);
+                        int32_t pct = vol * 100 / MIX_MAX_VOLUME;
+                        lv_subject_set_int(&speaker_vol, pct);
+                        printf("[Audio] Volume: %d%%\n", pct);
+                        break;
+                    }
+
+                    /* 下箭头：音量 -10% */
+                    case SDLK_DOWN: {
+                        if (!g_audio_ok) break;
+                        int vol = Mix_VolumeMusic(-1);
+                        vol = std::max(vol - 13, 0);
+                        Mix_VolumeMusic(vol);
+                        int32_t pct = vol * 100 / MIX_MAX_VOLUME;
+                        lv_subject_set_int(&speaker_vol, pct);
+                        printf("[Audio] Volume: %d%%\n", pct);
+                        break;
+                    }
+#endif /* HAVE_SDL2_MIXER */
 
                     default:
                         break;
@@ -376,13 +561,13 @@ static bool handle_sdl_events(void)
 }
 
 /* ======================================================
- * LVGL Tick 驱动（基于 SDL_GetTicks）
+ * LVGL Tick 驱动
  * ====================================================== */
 static uint32_t g_last_tick_ms = 0;
 
 static void lvgl_tick_update(void)
 {
-    uint32_t now = SDL_GetTicks();
+    uint32_t now     = SDL_GetTicks();
     uint32_t elapsed = now - g_last_tick_ms;
     if (elapsed > 0) {
         lv_tick_inc(elapsed);
@@ -396,63 +581,57 @@ static void lvgl_tick_update(void)
 int main(int argc, char *argv[])
 {
     printf("=== ESP32S3-LCD17 PC Simulator ===\n");
-    printf("  Screen: %dx%d  Scale: %d\n",
-           SCREEN_WIDTH, SCREEN_HEIGHT, DISP_SCALE);
-    printf("  Assets: ./%s\n", ASSETS_PATH);
-    printf("  Keys:  R=rotate  T=theme  Q/ESC=quit\n\n");
+    printf("  Screen : %dx%d  Scale: %d\n", SCREEN_WIDTH, SCREEN_HEIGHT, DISP_SCALE);
+    printf("  Assets : ./%s\n", ASSETS_PATH[0] ? ASSETS_PATH : "(cwd)");
+    printf("  Music  : ./%s\n", MUSIC_DIR);
+#ifdef HAVE_SDL2_MIXER
+    printf("  Audio  : SDL2_mixer enabled\n");
+#else
+    printf("  Audio  : disabled (SDL2_mixer not found)\n");
+#endif
+    printf("  Keys   : R=rotate  T=theme  Space=pause  N=next  P=prev\n");
+    printf("           Up/Down=volume  Q/ESC=quit\n\n");
 
-    /* 1. SDL2 初始化 */
-    if (!sdl_init()) {
-        return 1;
-    }
+    /* 1. SDL2 */
+    if (!sdl_init()) return 1;
 
-    /* 2. LVGL 初始化（含显示和输入设备） */
+    /* 2. LVGL */
     lvgl_init();
 
-    /* 3. 注册文件系统驱动（映射 A: → ./assets/） */
+    /* 3. 文件系统 */
     lv_fs_pc_init();
 
-    /* 4. 加载 SD 卡资源（字体、图片，路径与嵌入式端完全一致） */
-    /*    "A:assets/" 对应本地 ./assets/assets/，
-     *    或者直接传 "A:" 让 lvgl_sd_resource_init 拼接 "assets/" 子目录。
-     *    当前嵌入式端调用是 lvgl_sd_resource_init("A:assets/")，
-     *    字体路径会变成 "A:assets/fonts/geist_light_60"，
-     *    即本地路径 ./assets/assets/fonts/geist_light_60。
-     *    建议 assets/ 目录直接放在可执行文件旁，并在其下建 fonts/ images/。
-     *    若要保持与嵌入式端完全一致的路径格式，可调整 ASSETS_PATH = "" 使
-     *    驱动直接映射到当前目录，字体放 ./assets/fonts/ 即可。
-     */
+    /* 4. UI 资源（字体、图片） */
     lvgl_sd_resource_init("A:assets/");
 
-    /* 5. 创建时钟屏幕 */
+    /* 5. 时钟屏幕 */
     create_clock_screen();
 
-    /* 6. 主循环 */
-    g_last_tick_ms = SDL_GetTicks();
+    /* 6. 音频（在 UI 初始化后，确保 Subject 已就绪） */
+#ifdef HAVE_SDL2_MIXER
+    audio_init();
+#endif
+
+    /* 7. 主循环 */
+    g_last_tick_ms  = SDL_GetTicks();
     g_last_clock_ms = SDL_GetTicks();
 
     while (true) {
-        /* 处理 SDL2 事件 */
-        if (!handle_sdl_events()) {
-            break;
-        }
+        if (!handle_sdl_events()) break;
 
-        /* 更新 LVGL Tick */
         lvgl_tick_update();
-
-        /* 驱动 LVGL 渲染 */
         uint32_t delay_ms = lv_timer_handler();
-
-        /* 更新时钟显示 */
         update_clock();
 
-        /* 限制 CPU 占用（最大约 200fps） */
         if (delay_ms > 0 && delay_ms < 5) delay_ms = 5;
         SDL_Delay(delay_ms);
     }
 
-    /* 7. 清理 */
+    /* 8. 清理 */
     printf("[SIM] Exiting...\n");
+#ifdef HAVE_SDL2_MIXER
+    audio_deinit();
+#endif
     free(g_px_buf);
     SDL_DestroyTexture(g_texture);
     SDL_DestroyRenderer(g_renderer);

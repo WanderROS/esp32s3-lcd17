@@ -16,14 +16,16 @@
 ### macOS
 
 ```bash
-brew install cmake sdl2
+brew install cmake sdl2 sdl2_mixer
 ```
 
 ### Ubuntu / Debian
 
 ```bash
-sudo apt install cmake libsdl2-dev build-essential
+sudo apt install cmake libsdl2-dev libsdl2-mixer-dev build-essential
 ```
+
+> `sdl2_mixer` 为可选依赖。找不到时音频功能自动禁用，其余功能不受影响。
 
 ## 构建步骤
 
@@ -46,6 +48,11 @@ cmake --build build_sim -j$(nproc)
 |---|---|
 | `R` | 切换屏幕旋转（0° / 90° / 180° / 270°） |
 | `T` | 切换深色 / 浅色主题 |
+| `Space` | 音乐 暂停 / 继续 |
+| `N` | 下一首 |
+| `P` | 上一首 |
+| `↑` | 音量 +10% |
+| `↓` | 音量 -10% |
 | `Q` / `ESC` | 退出 |
 | 鼠标左键 | 触摸交互 |
 
@@ -58,7 +65,7 @@ cmake --build build_sim -j$(nproc)
 | 时钟 | PCF85063 RTC | 系统时间 (`time.h`) |
 | 文件系统 | SD 卡 (`/sdcard`) | 本地 `./assets/` |
 | 内存分配 | 自定义 PSRAM 分配器 | 标准 `malloc` |
-| 音频 | ES8311 I2S | 跳过（stub） |
+| 音频 | ES8311 I2S | SDL2_mixer MP3（`assets/music/*.mp3`） |
 | PMU / 电源键 | AXP2101 | 键盘 R 键模拟 |
 | 颜色深度 | RGB565 (16-bit) | XRGB8888 (32-bit) |
 
@@ -67,8 +74,18 @@ cmake --build build_sim -j$(nproc)
 构建后，字体和图片会自动复制到 `build_sim/assets/`：
 - `build_sim/assets/fonts/`：LVGL binfont 二进制字体文件
 - `build_sim/assets/images/`：PNG 图标资源
+- `build_sim/assets/music/`：MP3 音乐文件（**需手动放置**）
 
-如果手动修改了资源文件，重新运行 `cmake --build build_sim` 即可自动同步。
+### 放置 MP3
+
+```bash
+cp your_music.mp3 build_sim/assets/music/
+./build_sim/sim   # 启动后自动扫描并播放
+```
+
+支持多个 MP3 文件，按文件名排序循环播放。
+
+如果手动修改了资源文件，重新运行 `cmake --build build_sim` 即可自动同步字体和图片。
 
 ## 清理
 
